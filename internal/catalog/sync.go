@@ -538,11 +538,17 @@ func (c *Catalog) ensurePersonCredits(ctx context.Context, personID int64) {
 			c.log.Debug("catalog: begin person credits", "person", personID, "err", err)
 		} else {
 			defer tx.Rollback() // after Commit this returns ErrTxDone, ignorable
+			var insertErr error
 			for _, l := range links {
-				_, _ = tx.ExecContext(ctx, `INSERT INTO catalog_credits(key,person_tmdb,name,role,kind,ord,thumb) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
-					int64(l.key), personID, personName, l.role, l.kind, l.ord, personThumb)
+				if _, err := tx.ExecContext(ctx, `INSERT INTO catalog_credits(key,person_tmdb,name,role,kind,ord,thumb) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+					int64(l.key), personID, personName, l.role, l.kind, l.ord, personThumb); err != nil {
+					insertErr = err
+					break
+				}
 			}
-			if err := tx.Commit(); err != nil {
+			if insertErr != nil {
+				c.log.Debug("catalog: insert person credits", "person", personID, "err", insertErr)
+			} else if err := tx.Commit(); err != nil {
 				c.log.Debug("catalog: commit person credits", "person", personID, "err", err)
 			} else {
 				c.writeGen.Add(1)
