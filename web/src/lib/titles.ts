@@ -5,7 +5,7 @@ import type { TitleDetail } from "./contract";
 const cache = new Map<string, Promise<TitleDetail | null>>();
 
 /** Title metadata (artwork) by rating key, cached for the session; null when unknown. */
-export function loadTitle(key: string): Promise<TitleDetail | null> {
+function loadTitle(key: string): Promise<TitleDetail | null> {
   let p = cache.get(key);
   if (!p) {
     p = api.title(key).catch(() => null);

@@ -94,10 +94,6 @@ func probeMode(ctx context.Context, r Runner, ffprobe, input string, live bool) 
 	return nil, lastErr
 }
 
-func probeOnce(ctx context.Context, r Runner, ffprobe, input string, a probeAttempt) (*core.MediaInfo, error) {
-	return probeOnceMode(ctx, r, ffprobe, input, a, false)
-}
-
 func probeOnceMode(ctx context.Context, r Runner, ffprobe, input string, a probeAttempt, live bool) (*core.MediaInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()

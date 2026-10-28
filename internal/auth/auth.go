@@ -83,7 +83,6 @@ CREATE UNIQUE INDEX auth_users_one_owner ON auth_users(is_owner) WHERE is_owner=
 
 // User origins.
 const (
-	originOwner     = "owner"
 	originFriend    = "friend"    // from the plex.tv friend sync
 	originValidated = "validated" // first seen through plex.tv validation
 )

@@ -12,12 +12,10 @@ import (
 
 // RAR 4.x block types.
 const (
-	rar4Mark    = 0x72
-	rar4Main    = 0x73
-	rar4File    = 0x74
-	rar4Comment = 0x75
-	rar4NewSub  = 0x7a
-	rar4End     = 0x7b
+	rar4Main   = 0x73
+	rar4File   = 0x74
+	rar4NewSub = 0x7a
+	rar4End    = 0x7b
 )
 
 // RAR 4.x flags.

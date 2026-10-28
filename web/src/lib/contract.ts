@@ -29,7 +29,7 @@ export interface TitleDetail extends TitleCard {
   collection?: { id: number; name: string } | null;
 }
 
-export const RULE_FIELDS = [
+const RULE_FIELDS = [
   "genre",
   "keyword",
   "person",
@@ -53,7 +53,7 @@ export const RULE_FIELDS = [
 ] as const;
 export type RuleField = (typeof RULE_FIELDS)[number];
 
-export const RULE_OPS = ["is", "isNot", "in", "notIn", "gte", "lte", "between", "within"] as const;
+const RULE_OPS = ["is", "isNot", "in", "notIn", "gte", "lte", "between", "within"] as const;
 export type RuleOp = (typeof RULE_OPS)[number];
 
 export interface Rule {

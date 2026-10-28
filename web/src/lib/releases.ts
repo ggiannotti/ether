@@ -282,7 +282,7 @@ export function sourceLabel(source: string): string {
 }
 
 /** "4K", "1080p", or "SD" for unknown heights. */
-export function resolutionLabel(info: ReleaseInfo | undefined): string {
+function resolutionLabel(info: ReleaseInfo | undefined): string {
   const h = info?.height ?? 0;
   if (h >= 2160) return "4K";
   if (h > 0) return `${h}p`;

@@ -601,17 +601,3 @@ export function policyChips(p: RowPolicy, dayNames: readonly string[]): string[]
   if (hasWhen(p.when)) out.push(describeWhen(p.when, dayNames));
   return out;
 }
-
-export function ordinal(n: number): string {
-  const s =
-    n % 100 >= 11 && n % 100 <= 13
-      ? "th"
-      : n % 10 === 1
-        ? "st"
-        : n % 10 === 2
-          ? "nd"
-          : n % 10 === 3
-            ? "rd"
-            : "th";
-  return `${n}${s}`;
-}
