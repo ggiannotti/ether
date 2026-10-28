@@ -47,9 +47,10 @@ func (trajStubTx) Commit() error   { return nil }
 func (trajStubTx) Rollback() error { return nil }
 
 // trajStubConn serves the three ShowTrajectories queries from canned
-// rows. showFail / seasonFail / episodeFail make that cursor deliver one
-// valid row and then errIter from Next. epQueryFail makes the episode
-// QueryContext itself fail; epScanBad makes one episode row fail Scan.
+// rows. showFail / seasonFail make that cursor deliver one valid row and
+// then errIter from Next; episodeFail delivers three valid rows, then
+// errIter. epQueryFail makes the episode QueryContext itself fail;
+// epScanBad makes one episode row fail Scan.
 type trajStubConn struct {
 	showKey     int64
 	showFail    bool
@@ -83,6 +84,17 @@ func (c *trajStubConn) QueryContext(_ context.Context, query string, _ []driver.
 			return nil, errIter
 		}
 		data := [][]driver.Value{{c.showKey, int64(1), 7.0}}
+		if c.epFail {
+			// Three valid points (more than the 2 seasons, all 6.0)
+			// then errIter: merging the partial points instead of
+			// discarding them on erows.Err() would replace the season
+			// trajectory with {RatedSeasons:3 Early:6 Finale:6 Peak:6}.
+			data = [][]driver.Value{
+				{c.showKey, int64(1), 6.0},
+				{c.showKey, int64(2), 6.0},
+				{c.showKey, int64(3), 6.0},
+			}
+		}
 		if c.epScanBad {
 			// Valid points that would replace the season trajectory
 			// (3 valid points > 2 seasons, all 6.0) plus one row whose
@@ -183,6 +195,9 @@ func TestShowTrajectoriesEpisodeRowsErrKeepsSeasons(t *testing.T) {
 	if !ok {
 		t.Fatalf("trajectory missing, map = %v", out)
 	}
+	// Only the season points (8.0, 9.0) may be used: merging the 3
+	// partial episode points delivered before errIter would give
+	// {RatedSeasons:3 Early:6 Finale:6 Peak:6}.
 	if traj.RatedSeasons != 2 || traj.EarlyRating != 8.0 || traj.FinaleRating != 9.0 || traj.PeakRating != 9.0 {
 		t.Fatalf("trajectory = %+v, want season-based {RatedSeasons:2 Early:8 Finale:9 Peak:9}", traj)
 	}

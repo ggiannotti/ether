@@ -547,7 +547,7 @@ func (c *Catalog) ensurePersonCredits(ctx context.Context, personID int64) {
 	if len(links) > 0 {
 		tx, err := c.db.BeginTx(ctx, nil)
 		if err != nil {
-			c.log.Debug("catalog: begin person credits", "person", personID, "err", err)
+			c.log.Warn("catalog: begin person credits", "person", personID, "err", err)
 		} else {
 			defer tx.Rollback() // after Commit this returns ErrTxDone, ignorable
 			var insertErr error

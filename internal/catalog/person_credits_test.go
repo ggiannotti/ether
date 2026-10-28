@@ -19,38 +19,18 @@ import (
 
 // installSecondCreditFailure makes the second credit insert (ord=1) for
 // person 777 abort, so ensurePersonCredits' transaction must roll back.
+// SQLite-only: exercita o caminho via trigger RAISE(ABORT) (store.OpenMemory).
 func installSecondCreditFailure(t *testing.T, db *sql.DB) {
 	t.Helper()
-	ctx := context.Background()
-	var stmts []string
-	if store.DialectOf(db) == store.Postgres {
-		stmts = []string{
-			`CREATE OR REPLACE FUNCTION fail_second_person_credit() RETURNS trigger AS $$ BEGIN IF NEW.person_tmdb=777 AND NEW.ord=1 THEN RAISE EXCEPTION 'stub: second credit insert fails'; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql`,
-			`CREATE TRIGGER fail_second_person_credit BEFORE INSERT ON catalog_credits FOR EACH ROW EXECUTE FUNCTION fail_second_person_credit()`,
-		}
-	} else {
-		stmts = []string{
-			`CREATE TRIGGER fail_second_person_credit BEFORE INSERT ON catalog_credits WHEN NEW.person_tmdb=777 AND NEW.ord=1 BEGIN SELECT RAISE(ABORT, 'stub: second credit insert fails'); END`,
-		}
-	}
-	for _, q := range stmts {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatalf("install credit failure trigger: %v", err)
-		}
+	if _, err := db.ExecContext(context.Background(), `CREATE TRIGGER fail_second_person_credit BEFORE INSERT ON catalog_credits WHEN NEW.person_tmdb=777 AND NEW.ord=1 BEGIN SELECT RAISE(ABORT, 'stub: second credit insert fails'); END`); err != nil {
+		t.Fatalf("install credit failure trigger: %v", err)
 	}
 }
 
 func dropSecondCreditFailure(t *testing.T, db *sql.DB) {
 	t.Helper()
-	ctx := context.Background()
-	stmts := []string{`DROP TRIGGER IF EXISTS fail_second_person_credit ON catalog_credits`, `DROP FUNCTION IF EXISTS fail_second_person_credit()`}
-	if store.DialectOf(db) != store.Postgres {
-		stmts = []string{`DROP TRIGGER IF EXISTS fail_second_person_credit`}
-	}
-	for _, q := range stmts {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatalf("drop credit failure trigger: %v", err)
-		}
+	if _, err := db.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS fail_second_person_credit`); err != nil {
+		t.Fatalf("drop credit failure trigger: %v", err)
 	}
 }
 
