@@ -112,21 +112,8 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 		results := make(chan validation, count)
 		var wg sync.WaitGroup
 		for j := 0; j < count; j++ {
-			wg.Add(1)
-			go func(j int) {
-				defer wg.Done()
-				checkCtx, cancelCheck := context.WithTimeout(workCtx, candidateBudget)
-				defer cancelCheck()
-				i := base + j
-				var v validation
-				if cands[i].prepared != nil {
-					v = cands[i].prepared.wait(checkCtx)
-				} else {
-					v = s.validateOne(checkCtx, cands[i].rel)
-				}
-				v.index = i
-				results <- v
-			}(j)
+			i := base + j
+			s.launchValidation(&wg, workCtx, cands[i], i, results)
 		}
 		winner := -1
 		var nzb []byte

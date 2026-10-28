@@ -87,8 +87,10 @@ func (s *Service) markVerified(ctx context.Context, releaseID string) {
 	s.verified[releaseID] = now
 	s.mu.Unlock()
 	if s.db != nil {
-		_, _ = s.db.ExecContext(ctx, `INSERT INTO resolver_verified(release_id, checked_at) VALUES (?, ?)
-			ON CONFLICT(release_id) DO UPDATE SET checked_at=excluded.checked_at`, releaseID, now.Unix())
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO resolver_verified(release_id, checked_at) VALUES (?, ?)
+			ON CONFLICT(release_id) DO UPDATE SET checked_at=excluded.checked_at`, releaseID, now.Unix()); err != nil {
+			s.log.Debug("resolver verified check not saved", "release", releaseID, "err", err)
+		}
 	}
 }
 
@@ -120,7 +122,9 @@ func (s *Service) forgetVerified(ctx context.Context, releaseID string) {
 	delete(s.verified, releaseID)
 	s.mu.Unlock()
 	if s.db != nil {
-		_, _ = s.db.ExecContext(ctx, `DELETE FROM resolver_verified WHERE release_id=?`, releaseID)
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM resolver_verified WHERE release_id=?`, releaseID); err != nil {
+			s.log.Debug("resolver verified check not forgotten", "release", releaseID, "err", err)
+		}
 	}
 }
 

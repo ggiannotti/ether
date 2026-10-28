@@ -3,12 +3,35 @@ package resolver
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
 type observationTitleKey struct{}
+
+// launchValidation runs one candidate check in its own goroutine: a
+// per-candidate timeout over workCtx, reusing a prepared check when present,
+// tagging the result with its candidate index and sending it on results.
+// The caller owns workCtx cancellation and joining wg; results buffering is
+// the caller's choice and is unchanged by this extraction.
+func (s *Service) launchValidation(wg *sync.WaitGroup, workCtx context.Context, cand candidate, i int, results chan<- validation) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		checkCtx, cancel := context.WithTimeout(workCtx, candidateBudget)
+		defer cancel()
+		var v validation
+		if cand.prepared != nil {
+			v = cand.prepared.wait(checkCtx)
+		} else {
+			v = s.validateOne(checkCtx, cand.rel)
+		}
+		v.index = i
+		results <- v
+	}()
+}
 
 func (s *Service) validateOne(ctx context.Context, rel core.Release) validation {
 	v := validation{}

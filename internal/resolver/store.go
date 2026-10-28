@@ -48,7 +48,6 @@ func (s *Service) loadPersisted(ctx context.Context) {
 	// while inside badRetention of when they were last marked.
 	rows, err := s.db.QueryContext(ctx, `SELECT release_id, reason, updated_at, manual FROM resolver_bad WHERE manual=1 OR updated_at>=?`, s.now().Add(-badRetention).Unix())
 	if err == nil {
-		defer rows.Close()
 		s.mu.Lock()
 		for rows.Next() {
 			var id, reason string
@@ -59,12 +58,14 @@ func (s *Service) loadPersisted(ctx context.Context) {
 			}
 		}
 		s.mu.Unlock()
+		if err := rows.Err(); err != nil {
+			s.log.Debug("resolver blocks not fully loaded", "err", err)
+		}
 		rows.Close()
 	}
 	s.loadPins(ctx)
 	rrows, err := s.db.QueryContext(ctx, `SELECT indexer, successes, failures FROM resolver_reputation`)
 	if err == nil {
-		defer rrows.Close()
 		s.mu.Lock()
 		for rrows.Next() {
 			var name string
@@ -74,6 +75,10 @@ func (s *Service) loadPersisted(ctx context.Context) {
 			}
 		}
 		s.mu.Unlock()
+		if err := rrows.Err(); err != nil {
+			s.log.Debug("resolver reputations not fully loaded", "err", err)
+		}
+		rrows.Close()
 	}
 }
 

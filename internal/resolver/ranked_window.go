@@ -56,20 +56,7 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 			// an equivalent was already healthy; that time counts too.
 			startedAt[i] = gs
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			checkCtx, cancel := context.WithTimeout(workCtx, candidateBudget)
-			defer cancel()
-			var v validation
-			if cands[i].prepared != nil {
-				v = cands[i].prepared.wait(checkCtx)
-			} else {
-				v = s.validateOne(checkCtx, cands[i].rel)
-			}
-			v.index = i
-			results <- v
-		}()
+		s.launchValidation(&wg, workCtx, cands[i], i, results)
 	}
 	// stalled reports whether the lead is still checking past its grace,
 	// so that a healthy equivalent backup would already be allowed to win.

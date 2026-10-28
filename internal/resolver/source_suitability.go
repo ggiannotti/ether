@@ -78,6 +78,9 @@ func (s *Service) KnownUnavailableSince(ctx context.Context, keys []core.RatingK
 					out[k] = time.Unix(checked, 0)
 				}
 			}
+			if err := rows.Err(); err != nil {
+				s.log.Debug("resolver availability lookup failed", "err", err)
+			}
 			rows.Close()
 		}
 	}

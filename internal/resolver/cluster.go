@@ -116,7 +116,8 @@ func (s *Service) reloadReps(ctx context.Context) {
 			reps[name] = rep
 		}
 	}
-	if rows.Err() != nil {
+	if err := rows.Err(); err != nil {
+		s.log.Debug("resolver reputations not fully loaded", "err", err)
 		return
 	}
 	s.mu.Lock()

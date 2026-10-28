@@ -193,7 +193,8 @@ func (s *Service) loadPins(ctx context.Context) {
 		}
 		pins[p.TitleKey] = p
 	}
-	if rows.Err() != nil {
+	if err := rows.Err(); err != nil {
+		s.log.Warn("resolver pins not fully loaded", "err", err)
 		return
 	}
 	s.con.mu.Lock()
