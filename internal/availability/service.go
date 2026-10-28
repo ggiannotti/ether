@@ -459,7 +459,7 @@ func (s *Service) Candidates(ctx context.Context, t *core.Title) []core.Release 
 		}
 	}
 	if err := rows.Err(); err != nil {
-		s.log.Debug("availability candidates not fully loaded", "err", err)
+		s.log.Warn("availability candidates not fully loaded", "err", err)
 	}
 	return out
 }

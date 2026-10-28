@@ -168,7 +168,7 @@ func (s *Service) verifiedKeys(ctx context.Context) []core.RatingKey {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		s.log.Debug("availability verified keys not fully loaded", "err", err)
+		s.log.Warn("availability verified keys not fully loaded", "err", err)
 	}
 	return out
 }

@@ -78,7 +78,7 @@ func (s *Service) filterReleaseDiscovery(ctx context.Context, items []core.Title
 			}
 		}
 		if err := rows.Err(); err != nil {
-			s.log.Debug("availability observations not fully loaded", "err", err)
+			s.log.Warn("availability observations not fully loaded", "err", err)
 		}
 		rows.Close()
 	}

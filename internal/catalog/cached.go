@@ -130,15 +130,18 @@ func (c *Catalog) ShowTrajectories(ctx context.Context, shows []core.RatingKey) 
 			}
 		}
 		if err := erows.Err(); err != nil {
-			erows.Close()
-			return nil, err
-		}
-		erows.Close()
-		for k, pts := range epByShow {
-			if len(byShow[k]) < len(pts) {
-				byShow[k] = pts
+			// Episode augmentation is optional: keep the season
+			// trajectories already loaded and discard the partial
+			// episode points rather than failing the whole batch.
+			c.log.Warn("catalog: episode trajectories not fully loaded", "err", err)
+		} else {
+			for k, pts := range epByShow {
+				if len(byShow[k]) < len(pts) {
+					byShow[k] = pts
+				}
 			}
 		}
+		erows.Close()
 	}
 
 	for k, pts := range byShow {

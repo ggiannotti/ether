@@ -141,6 +141,14 @@ func (s *sharedCache) log(err error) {
 		s.c.logger.Warn("shared cache operation", "err", err)
 	}
 }
+
+// logRows logs a rows iteration error with the operation that produced
+// the cursor, so a partial read is attributable in the log.
+func (s *sharedCache) logRows(op string, err error) {
+	if err != nil {
+		s.c.logger.Warn("shared cache "+op+" not fully loaded", "err", err)
+	}
+}
 func (s *sharedCache) path(file string) string {
 	return filepath.Join(s.c.dataDir, file[:2], file+".seg")
 }
@@ -338,7 +346,7 @@ func (s *sharedCache) pins() map[string][]string {
 			out[id] = append(out[id], reason)
 		}
 	}
-	s.log(rows.Err())
+	s.logRows("pins", rows.Err())
 	return out
 }
 func (s *sharedCache) usage() (int64, int64) {
@@ -396,7 +404,7 @@ func (s *sharedCache) releases() []ReleaseUsage {
 		}
 		out = append(out, r)
 	}
-	s.log(rows.Err())
+	s.logRows("releases", rows.Err())
 	rows.Close()
 	s.log(err)
 	pins := s.pins()
@@ -540,7 +548,7 @@ func (s *sharedCache) heartbeat() {
 			files = append(files, f)
 		}
 	}
-	s.log(rows.Err())
+	s.logRows("heartbeat", rows.Err())
 	rows.Close()
 	for _, f := range files {
 		s.unlink(f)
@@ -674,6 +682,6 @@ func (c *Cache) ReleaseSizes() map[string]int64 {
 			out[id] = n
 		}
 	}
-	c.shared.log(rows.Err())
+	c.shared.logRows("ReleaseSizes", rows.Err())
 	return out
 }
