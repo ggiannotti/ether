@@ -195,6 +195,9 @@ func (c *ultraBlurCache) preload(ctx context.Context, wants []ultraBlurWant) {
 			c.set(core.RatingKey(k), path, &u)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		c.log.Debug("ultrablur preload", "err", err)
+	}
 }
 
 func placeholders(n int) string {

@@ -134,7 +134,9 @@ func (r *registry) close() {
 	<-r.done
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, _ = r.db.ExecContext(ctx, `DELETE FROM playback_live_sessions WHERE node_id=?`, r.self)
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM playback_live_sessions WHERE node_id=?`, r.self); err != nil {
+		r.warn("remove own sessions", err)
+	}
 }
 
 // poke schedules a sync soon (sessions changed).

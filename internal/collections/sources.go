@@ -499,8 +499,10 @@ func (s *Service) resolveRef(ctx context.Context, source string, r extRef, allow
 	}
 	remember := func(key core.RatingKey) core.RatingKey {
 		if key != 0 {
-			_, _ = s.db.ExecContext(ctx, `INSERT INTO collections_external(source,ext,key,at) VALUES(?,?,?,?)
-				ON CONFLICT(source,ext) DO UPDATE SET key=excluded.key, at=excluded.at`, cacheSrc, cacheID, int64(key), s.now().Unix())
+			if _, err := s.db.ExecContext(ctx, `INSERT INTO collections_external(source,ext,key,at) VALUES(?,?,?,?)
+				ON CONFLICT(source,ext) DO UPDATE SET key=excluded.key, at=excluded.at`, cacheSrc, cacheID, int64(key), s.now().Unix()); err != nil {
+				s.log.Debug("collections: remember external key", "err", err)
+			}
 		}
 		return key
 	}

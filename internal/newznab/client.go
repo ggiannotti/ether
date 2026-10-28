@@ -1038,7 +1038,9 @@ func (c *Client) saveNZB(releaseID string, body []byte) {
 		if err := os.MkdirAll(c.nzbDir, 0o755); err == nil {
 			tmp := path + ".tmp"
 			if os.WriteFile(tmp, body, 0o644) == nil {
-				_ = os.Rename(tmp, path)
+				if err := os.Rename(tmp, path); err != nil {
+					c.log.Debug("newznab save NZB failed", "indexer", c.Name(), "err", err)
+				}
 			}
 		}
 	}

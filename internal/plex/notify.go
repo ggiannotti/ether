@@ -107,17 +107,6 @@ func (t *sessionTracker) list() []playEntry {
 	return out
 }
 
-func (t *sessionTracker) bySessionKey(k int) (playEntry, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for _, e := range t.entries {
-		if e.sessionKey == k {
-			return *e, true
-		}
-	}
-	return playEntry{}, false
-}
-
 // expire drops entries without a timeline update for ttl and returns them.
 func (t *sessionTracker) expire(now time.Time, ttl time.Duration) []playEntry {
 	t.mu.Lock()

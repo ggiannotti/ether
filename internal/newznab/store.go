@@ -266,11 +266,15 @@ func (c *Client) cachePut(ctx context.Context, key string, results []core.Releas
 	if !ok {
 		return
 	}
-	_, _ = c.db.ExecContext(ctx,
+	if _, err := c.db.ExecContext(ctx,
 		`INSERT INTO newznab_cache(cache_key, indexer_id, results, expires_at) VALUES (?,?,?,?)
 		 ON CONFLICT(cache_key) DO UPDATE SET results=excluded.results, expires_at=excluded.expires_at`,
-		key, c.indexerID(), raw, exp.Unix())
-	_, _ = c.db.ExecContext(ctx, `DELETE FROM newznab_cache WHERE expires_at < ?`, c.now().Unix())
+		key, c.indexerID(), raw, exp.Unix()); err != nil {
+		c.log.Debug("newznab cache save failed", "indexer", c.Name(), "err", err)
+	}
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM newznab_cache WHERE expires_at < ?`, c.now().Unix()); err != nil {
+		c.log.Debug("newznab cache prune failed", "indexer", c.Name(), "err", err)
+	}
 }
 
 // --- caps cache ---
@@ -302,8 +306,10 @@ func (c *Client) capsToDB(ctx context.Context, caps *Caps, endpoint string) {
 	if err != nil {
 		return
 	}
-	_, _ = c.db.ExecContext(ctx,
+	if _, err := c.db.ExecContext(ctx,
 		`INSERT INTO newznab_caps(indexer_id, caps, fetched_at, endpoint) VALUES (?,?,?,?)
 		 ON CONFLICT(indexer_id) DO UPDATE SET caps=excluded.caps, fetched_at=excluded.fetched_at, endpoint=excluded.endpoint`,
-		c.indexerID(), string(raw), c.now().Unix(), endpoint)
+		c.indexerID(), string(raw), c.now().Unix(), endpoint); err != nil {
+		c.log.Debug("newznab caps save failed", "indexer", c.Name(), "err", err)
+	}
 }

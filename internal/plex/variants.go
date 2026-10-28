@@ -30,6 +30,7 @@ import (
 	"database/sql"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,6 +105,9 @@ func (r *variantIDRegistry) loadLocked() {
 			r.byID[id] = ref
 			r.byPair[ref] = id
 		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.Default().Warn("plex: variant ids not fully loaded", "err", err)
 	}
 }
 

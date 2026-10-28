@@ -392,7 +392,9 @@ func (s *Service) buildNow(ctx context.Context, row *specRow) (*memberSet, error
 	// Remember what labels resolved to, so the Studio shows real ids.
 	if !row.builtin && resolvedChanged(row.spec, res.resolved) {
 		if js, err := specJSON(res.resolved); err == nil {
-			_, _ = s.db.ExecContext(ctx, `UPDATE collections_specs SET spec_json=? WHERE id=?`, js, row.id)
+			if _, err := s.db.ExecContext(ctx, `UPDATE collections_specs SET spec_json=? WHERE id=?`, js, row.id); err != nil {
+				s.log.Debug("collections: save resolved spec", "id", row.publicID(), "err", err)
+			}
 		}
 	}
 	at := s.now().UTC().Truncate(time.Second)

@@ -18,12 +18,10 @@ import (
 
 // Plex metadata type numbers.
 const (
-	typeNumMovie      = 1
-	typeNumShow       = 2
-	typeNumSeason     = 3
-	typeNumEpisode    = 4
-	typeNumPlaylist   = 15
-	typeNumCollection = 18
+	typeNumMovie   = 1
+	typeNumShow    = 2
+	typeNumSeason  = 3
+	typeNumEpisode = 4
 )
 
 func typeNumber(t core.MediaType) int {

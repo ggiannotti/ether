@@ -136,7 +136,9 @@ func (c *clusterState) close() {
 	<-c.done
 	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
-	_, _ = c.db.ExecContext(ctx, `DELETE FROM plex_sessions WHERE node_id=?`, c.self)
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM plex_sessions WHERE node_id=?`, c.self); err != nil {
+		c.warn("remove own sessions", err)
+	}
 }
 
 func (c *clusterState) warn(what string, err error) {
@@ -367,6 +369,9 @@ func (c *clusterState) remoteEntries(ctx context.Context) []playEntry {
 			continue
 		}
 		out = append(out, se.entry(node))
+	}
+	if err := rows.Err(); err != nil {
+		c.warn("read other nodes' sessions", err)
 	}
 	return out
 }

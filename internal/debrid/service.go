@@ -1047,7 +1047,9 @@ func (s *Service) blockedFile(ctx context.Context, e *entry, hash, torrentID str
 
 func (s *Service) forgetTorrent(ctx context.Context, providerID, hash string) {
 	if s.db != nil {
-		_, _ = s.db.ExecContext(ctx, `UPDATE debrid_torrents SET torrent_id = '' WHERE provider_id = ? AND info_hash = ?`, providerID, strings.ToLower(hash))
+		if _, err := s.db.ExecContext(ctx, `UPDATE debrid_torrents SET torrent_id = '' WHERE provider_id = ? AND info_hash = ?`, providerID, strings.ToLower(hash)); err != nil {
+			s.log.Debug("debrid: forget torrent", "err", err)
+		}
 	}
 }
 

@@ -459,6 +459,9 @@ func (s *playQueueStore) selectShared(userID, itemID int64) {
 				break
 			}
 		}
+		if err := rows.Err(); err != nil {
+			s.cl.warn("find play queue item", err)
+		}
 		rows.Close()
 		cancel()
 		if qid == 0 {

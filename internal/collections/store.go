@@ -372,11 +372,6 @@ func (s *Service) meta(ctx context.Context, k string) string {
 	return v
 }
 
-func (s *Service) setMeta(ctx context.Context, k, v string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO collections_meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, k, v)
-	return err
-}
-
 func boolInt(b bool) int {
 	if b {
 		return 1

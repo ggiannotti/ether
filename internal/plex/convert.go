@@ -124,20 +124,6 @@ func artURL(t *core.Title) string {
 	return "/library/metadata/" + t.Key.String() + "/art/" + imageStamp(t)
 }
 
-func showThumbURL(t *core.Title) string {
-	if t.ShowKey == 0 {
-		return ""
-	}
-	return "/library/metadata/" + t.ShowKey.String() + "/thumb/" + imageStamp(t)
-}
-
-func showArtURL(t *core.Title) string {
-	if t.ShowKey == 0 {
-		return ""
-	}
-	return "/library/metadata/" + t.ShowKey.String() + "/art/" + imageStamp(t)
-}
-
 func seasonTitle(t *core.Title) string {
 	if t.SeasonTitle != "" {
 		return t.SeasonTitle

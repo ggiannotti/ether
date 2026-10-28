@@ -528,7 +528,9 @@ func (e *Engine) runLeases(self string) {
 		select {
 		case <-e.ctx.Done():
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_, _ = e.svc.db.ExecContext(ctx, `DELETE FROM debrid_leases WHERE node_id = ?`, self)
+			if _, err := e.svc.db.ExecContext(ctx, `DELETE FROM debrid_leases WHERE node_id = ?`, self); err != nil {
+				e.log.Debug("debrid: delete streaming leases", "err", err)
+			}
 			cancel()
 			return
 		case <-e.leaseKick:
@@ -583,8 +585,13 @@ ON CONFLICT (provider_id, torrent_id, node_id) DO UPDATE SET expires_at = exclud
 			stale = append(stale, k)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		e.log.Debug("debrid: list streaming leases", "err", err)
+	}
 	rows.Close()
 	for _, k := range stale {
-		_, _ = db.ExecContext(ctx, `DELETE FROM debrid_leases WHERE provider_id = ? AND torrent_id = ? AND node_id = ?`, k.provider, k.torrent, self)
+		if _, err := db.ExecContext(ctx, `DELETE FROM debrid_leases WHERE provider_id = ? AND torrent_id = ? AND node_id = ?`, k.provider, k.torrent, self); err != nil {
+			e.log.Debug("debrid: delete stale streaming lease", "err", err)
+		}
 	}
 }
