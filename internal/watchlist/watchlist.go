@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"sync"
@@ -439,8 +440,12 @@ func (s *Service) Run(ctx context.Context) {
 				return
 			}
 			job, cancel := context.WithTimeout(ctx, 3*time.Minute)
-			_ = s.Sync(job, &us[i])
-			_ = s.Check(job, &us[i])
+			if err := s.Sync(job, &us[i]); err != nil {
+				slog.Default().Warn("watchlist sync failed", "user", us[i].ID, "err", err)
+			}
+			if err := s.Check(job, &us[i]); err != nil {
+				slog.Default().Warn("watchlist check failed", "user", us[i].ID, "err", err)
+			}
 			cancel()
 		}
 	}
@@ -473,8 +478,10 @@ func (s *Service) recordPass(ctx context.Context) {
 	if ctx.Err() != nil {
 		return // interrupted (leadership lost): let the next leader redo it
 	}
-	_, _ = s.db.ExecContext(ctx, `INSERT INTO watchlist_meta(k,v) VALUES('last_pass',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`,
-		strconv.FormatInt(s.o.Now().UnixMilli(), 10))
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO watchlist_meta(k,v) VALUES('last_pass',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`,
+		strconv.FormatInt(s.o.Now().UnixMilli(), 10)); err != nil {
+		slog.Default().Warn("watchlist: record pass failed", "err", err)
+	}
 }
 func (s *Service) user(ctx context.Context, id int64) (*core.User, error) {
 	if s.o.Users == nil {

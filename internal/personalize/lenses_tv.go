@@ -430,7 +430,13 @@ func (b *builder) genSticksLanding() []*candRow {
 	}
 	var trajs map[core.RatingKey]core.ShowTrajectory
 	if ts, ok := b.e.catalog.(trajectorySource); ok {
-		trajs, _ = ts.ShowTrajectories(b.ctx, endedKeys)
+		var err error
+		trajs, err = ts.ShowTrajectories(b.ctx, endedKeys)
+		if err != nil {
+			// Fail-closed upstream loses every trajectory; the fallback
+			// below (acclaimed Ended series) still applies, but degraded.
+			b.e.log.Debug("personalize: show trajectories failed", "err", err)
+		}
 	}
 	var in []core.Title
 	for _, t := range cands {

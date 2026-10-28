@@ -68,7 +68,13 @@ func (s *Service) Router() http.Handler {
 				http.Error(w, e.Error(), 502)
 				return
 			}
-			v, _ := s.Items(ctx, viewer(r))
+			itemsCtx, itemsCancel := context.WithTimeout(r.Context(), time.Minute)
+			defer itemsCancel()
+			v, e := s.Items(itemsCtx, viewer(r))
+			if e != nil {
+				http.Error(w, "Watchlist unavailable", 500)
+				return
+			}
 			reply(w, v)
 		})
 		r.Post("/check", func(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +84,13 @@ func (s *Service) Router() http.Handler {
 				http.Error(w, "Availability check incomplete", 502)
 				return
 			}
-			v, _ := s.Items(ctx, viewer(r))
+			itemsCtx, itemsCancel := context.WithTimeout(r.Context(), time.Minute)
+			defer itemsCancel()
+			v, e := s.Items(itemsCtx, viewer(r))
+			if e != nil {
+				http.Error(w, "Watchlist unavailable", 500)
+				return
+			}
 			reply(w, v)
 		})
 		r.Put("/items/{key}", func(w http.ResponseWriter, r *http.Request) {
