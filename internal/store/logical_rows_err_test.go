@@ -85,7 +85,7 @@ func TestExportLogicalMigrationsRowsErrAbortsBeforeWrite(t *testing.T) {
 	var buf bytes.Buffer
 	err := ExportLogical(context.Background(), db, &buf)
 	if !errors.Is(err, errIter) {
-		t.Errorf("err = %v, want errors.Is(errIter)", err)
+		t.Fatalf("err = %v, want errors.Is(errIter)", err)
 	}
 	if buf.Len() != 0 {
 		t.Errorf("wrote %d bytes before aborting on rows.Err: %q", buf.Len(), buf.String())

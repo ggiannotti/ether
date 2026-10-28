@@ -121,19 +121,27 @@ func (c *Catalog) ShowTrajectories(ctx context.Context, shows []core.RatingKey) 
 		ORDER BY show_key ASC, season ASC`, append([]any{nowTS}, args...)...)
 	if err == nil {
 		epByShow := map[core.RatingKey][]sPoint{}
+		scanDiscarded := 0
 		for erows.Next() {
 			var sk int64
 			var sea int
 			var r float64
-			if erows.Scan(&sk, &sea, &r) == nil {
-				epByShow[core.RatingKey(sk)] = append(epByShow[core.RatingKey(sk)], sPoint{season: sea, rating: r})
+			if err := erows.Scan(&sk, &sea, &r); err != nil {
+				scanDiscarded++
+				continue
 			}
+			epByShow[core.RatingKey(sk)] = append(epByShow[core.RatingKey(sk)], sPoint{season: sea, rating: r})
 		}
 		if err := erows.Err(); err != nil {
 			// Episode augmentation is optional: keep the season
 			// trajectories already loaded and discard the partial
 			// episode points rather than failing the whole batch.
 			c.log.Warn("catalog: episode trajectories not fully loaded", "err", err)
+		} else if scanDiscarded > 0 {
+			// A scan error means some episode points were dropped:
+			// discard the partial episode points (like an iteration
+			// error) rather than merging an incomplete set.
+			c.log.Warn("catalog: episode trajectories not fully loaded", "dropped", scanDiscarded)
 		} else {
 			for k, pts := range epByShow {
 				if len(byShow[k]) < len(pts) {
@@ -142,6 +150,8 @@ func (c *Catalog) ShowTrajectories(ctx context.Context, shows []core.RatingKey) 
 			}
 		}
 		erows.Close()
+	} else {
+		c.log.Warn("catalog: episode trajectories not fully loaded", "err", err)
 	}
 
 	for k, pts := range byShow {

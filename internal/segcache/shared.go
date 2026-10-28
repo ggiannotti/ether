@@ -682,6 +682,6 @@ func (c *Cache) ReleaseSizes() map[string]int64 {
 			out[id] = n
 		}
 	}
-	c.shared.logRows("ReleaseSizes", rows.Err())
+	c.shared.logRows("releaseSizes", rows.Err())
 	return out
 }

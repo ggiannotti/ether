@@ -47,12 +47,24 @@ func (trajStubTx) Commit() error   { return nil }
 func (trajStubTx) Rollback() error { return nil }
 
 // trajStubConn serves the three ShowTrajectories queries from canned
-// rows. seasonFail / episodeFail make that cursor deliver one valid row
-// and then errIter from Next.
+// rows. showFail / seasonFail / episodeFail make that cursor deliver one
+// valid row and then errIter from Next. epQueryFail makes the episode
+// QueryContext itself fail; epScanBad makes one episode row fail Scan.
 type trajStubConn struct {
-	showKey    int64
-	seasonFail bool
-	epFail     bool
+	showKey     int64
+	showFail    bool
+	seasonFail  bool
+	epFail      bool
+	epQueryFail bool
+	epScanBad   bool
+}
+
+type trajStubOpts struct {
+	showFail    bool
+	seasonFail  bool
+	epFail      bool
+	epQueryFail bool
+	epScanBad   bool
 }
 
 func (c *trajStubConn) Prepare(string) (driver.Stmt, error) {
@@ -67,9 +79,25 @@ func (c *trajStubConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, er
 func (c *trajStubConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	switch {
 	case strings.Contains(query, "type='episode'"):
+		if c.epQueryFail {
+			return nil, errIter
+		}
+		data := [][]driver.Value{{c.showKey, int64(1), 7.0}}
+		if c.epScanBad {
+			// Valid points that would replace the season trajectory
+			// (3 valid points > 2 seasons, all 6.0) plus one row whose
+			// season fails Scan. Discarding only the bad row would
+			// still merge the partial valid points.
+			data = [][]driver.Value{
+				{c.showKey, int64(1), 6.0},
+				{c.showKey, "bogus", 6.0},
+				{c.showKey, int64(3), 6.0},
+				{c.showKey, int64(4), 6.0},
+			}
+		}
 		return &trajStubRows{
 			cols: []string{"show_key", "season", "rating"},
-			data: [][]driver.Value{{c.showKey, int64(1), 7.0}},
+			data: data,
 			fail: c.epFail,
 		}, nil
 	case strings.Contains(query, "type='season'"):
@@ -85,11 +113,17 @@ func (c *trajStubConn) QueryContext(_ context.Context, query string, _ []driver.
 			data: data,
 			fail: c.seasonFail,
 		}, nil
-	default: // SELECT key, status, rating FROM catalog_titles WHERE key IN (...)
+	case strings.Contains(query, "SELECT key, status, rating"):
+		// First cursor: SELECT key, status, rating ... WHERE key IN (...)
+		// ("SELECT key," does not match the season/episode queries,
+		// which select show_key.)
 		return &trajStubRows{
 			cols: []string{"key", "status", "rating"},
 			data: [][]driver.Value{{c.showKey, "Ended", 8.5}},
+			fail: c.showFail,
 		}, nil
+	default:
+		return nil, errors.New("stub: unexpected query: " + query)
 	}
 }
 
@@ -104,10 +138,10 @@ func (c *trajStubConnector) Driver() driver.Driver {
 	return &trajStubDriver{conn: c.conn}
 }
 
-func newTrajStubCatalog(t *testing.T, seasonFail, epFail bool) *catalog.Catalog {
+func newTrajStubCatalog(t *testing.T, opts trajStubOpts) *catalog.Catalog {
 	t.Helper()
 	show := core.ShowKey(100)
-	conn := &trajStubConn{showKey: int64(show), seasonFail: seasonFail, epFail: epFail}
+	conn := &trajStubConn{showKey: int64(show), showFail: opts.showFail, seasonFail: opts.seasonFail, epFail: opts.epFail, epQueryFail: opts.epQueryFail, epScanBad: opts.epScanBad}
 	db := sql.OpenDB(&trajStubConnector{conn: conn})
 	t.Cleanup(func() { db.Close() })
 	c, err := catalog.New(db, nil, config.Catalog{}, slog.New(slog.DiscardHandler))
@@ -117,8 +151,19 @@ func newTrajStubCatalog(t *testing.T, seasonFail, epFail bool) *catalog.Catalog 
 	return c
 }
 
+func TestShowTrajectoriesShowRowsErrFailsClosed(t *testing.T) {
+	c := newTrajStubCatalog(t, trajStubOpts{showFail: true})
+	out, err := c.ShowTrajectories(context.Background(), []core.RatingKey{core.ShowKey(100)})
+	if !errors.Is(err, errIter) {
+		t.Fatalf("err = %v, want errors.Is(errIter)", err)
+	}
+	if out != nil {
+		t.Fatalf("map = %v, want nil on first cursor failure", out)
+	}
+}
+
 func TestShowTrajectoriesSeasonRowsErrFailsClosed(t *testing.T) {
-	c := newTrajStubCatalog(t, true, false)
+	c := newTrajStubCatalog(t, trajStubOpts{seasonFail: true})
 	out, err := c.ShowTrajectories(context.Background(), []core.RatingKey{core.ShowKey(100)})
 	if !errors.Is(err, errIter) {
 		t.Fatalf("err = %v, want errors.Is(errIter)", err)
@@ -129,7 +174,7 @@ func TestShowTrajectoriesSeasonRowsErrFailsClosed(t *testing.T) {
 }
 
 func TestShowTrajectoriesEpisodeRowsErrKeepsSeasons(t *testing.T) {
-	c := newTrajStubCatalog(t, false, true)
+	c := newTrajStubCatalog(t, trajStubOpts{epFail: true})
 	out, err := c.ShowTrajectories(context.Background(), []core.RatingKey{core.ShowKey(100)})
 	if err != nil {
 		t.Fatalf("err = %v, want nil (episode augmentation is optional)", err)
@@ -143,5 +188,38 @@ func TestShowTrajectoriesEpisodeRowsErrKeepsSeasons(t *testing.T) {
 	}
 	if !traj.SticksLanding {
 		t.Fatalf("trajectory = %+v, want SticksLanding for Ended show with finale 9.0", traj)
+	}
+}
+
+func TestShowTrajectoriesEpisodeQueryErrKeepsSeasons(t *testing.T) {
+	c := newTrajStubCatalog(t, trajStubOpts{epQueryFail: true})
+	out, err := c.ShowTrajectories(context.Background(), []core.RatingKey{core.ShowKey(100)})
+	if err != nil {
+		t.Fatalf("err = %v, want nil (episode augmentation is optional)", err)
+	}
+	traj, ok := out[core.ShowKey(100)]
+	if !ok {
+		t.Fatalf("trajectory missing, map = %v", out)
+	}
+	if traj.RatedSeasons != 2 || traj.EarlyRating != 8.0 || traj.FinaleRating != 9.0 || traj.PeakRating != 9.0 {
+		t.Fatalf("trajectory = %+v, want season-based {RatedSeasons:2 Early:8 Finale:9 Peak:9}", traj)
+	}
+}
+
+func TestShowTrajectoriesEpisodeScanErrDiscardsEpisodePoints(t *testing.T) {
+	c := newTrajStubCatalog(t, trajStubOpts{epScanBad: true})
+	out, err := c.ShowTrajectories(context.Background(), []core.RatingKey{core.ShowKey(100)})
+	if err != nil {
+		t.Fatalf("err = %v, want nil (episode augmentation is optional)", err)
+	}
+	traj, ok := out[core.ShowKey(100)]
+	if !ok {
+		t.Fatalf("trajectory missing, map = %v", out)
+	}
+	// Only the season points (8.0, 9.0) may be used: merging the
+	// partial valid episode points would give {RatedSeasons:3 Early:6
+	// Finale:6 Peak:6}.
+	if traj.RatedSeasons != 2 || traj.EarlyRating != 8.0 || traj.FinaleRating != 9.0 || traj.PeakRating != 9.0 {
+		t.Fatalf("trajectory = %+v, want season-based {RatedSeasons:2 Early:8 Finale:9 Peak:9}", traj)
 	}
 }
