@@ -538,6 +538,258 @@ func subtitleOrdinal(info core.MediaInfo, idx int) int {
 	return 0
 }
 
+// picturePlan is the encoded picture planVideo derives from the source
+// and, when present, the static-header contract.
+type picturePlan struct {
+	w, h     int
+	scaling  bool
+	keepHDR  bool
+	tonemap  bool
+	tenBit   bool
+	outRange string
+	convert  string
+	pad      bool
+	setSAR   string
+}
+
+// planPicture computes the encoded picture: output size, HDR handling and,
+// with a contract, its depth/range/colour conversion/padding/SAR.
+func planPicture(s runSpec, v *core.StreamInfo, codec string) picturePlan {
+	d := s.Decision
+	w, h := outputSize(v.Width, v.Height, d.MaxHeight)
+	// Keep HDR only where HEVC can carry the decoded picture's HDR10/HLG;
+	// any other HDR picture is tone mapped (8-bit SDR output), and an SDR
+	// picture (a Dolby Vision SDR base layer) never is.
+	keepHDR := keepsHDR(v) && !d.ToneMap && codec == "hevc"
+	pic := picturePlan{
+		w: w, h: h, scaling: v.Height > 0 && h < v.Height,
+		keepHDR: keepHDR, tonemap: encodedRange(v) != rangeSDR && !keepHDR,
+		// tenBit and outRange describe the encoded picture; without a
+		// contract they follow keepHDR.
+		tenBit: keepHDR, outRange: rangeSDR,
+	}
+	if keepHDR {
+		pic.outRange = encodedRange(v)
+	}
+	if t := s.Target; t != nil {
+		// A static-header session: encode the contract's picture
+		// whatever this source is (contract.go).
+		picture := *v
+		if s.PictureCrop != nil {
+			picture.Width, picture.Height = s.PictureCrop.width, s.PictureCrop.height
+		}
+		pic.w, pic.h = t.fit(&picture)
+		pic.scaling = pic.w != picture.Width || pic.h != picture.Height
+		pic.pad = pic.w != t.width || pic.h != t.height
+		pic.tenBit, pic.outRange = t.depth == 10, t.rng
+		pic.tonemap = t.tonemaps(v)
+		if t.convertsColour(v) {
+			pic.convert = zscaleColour(v, t)
+		}
+		// scale keeps the display aspect: its output SAR follows the source's.
+		src := pictureOf(v)
+		if n, dd := reduce(src.sarNum*picture.Width*pic.h, src.sarDen*picture.Height*pic.w); pic.pad || n != t.pic.sarNum || dd != t.pic.sarDen {
+			pic.setSAR = fmt.Sprintf("setsar=%d/%d", t.pic.sarNum, t.pic.sarDen)
+		}
+	}
+	return pic
+}
+
+// planFilterChain chooses the GPU or software filter chain: hardware
+// decode/scale/tone-map when a pipeline applies, else the software
+// convert/tone-map plus finish. finish sizes/pads/formats software frames.
+func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel string, burn bool, finish func([]string) []string) (inputArgs, chain []string, hwFrames bool) {
+	// Software filters only: GPU scalers neither pad nor convert SDR to
+	// HDR, and their 8-bit tone-map paths cannot feed a 10-bit contract.
+	gpuOff := s.PictureCrop != nil || pic.pad || pic.convert != "" || (pic.tonemap && pic.tenBit)
+	gpuInput, gpuFilters, gpuOK := gpuPipeline(s, accel, pic.w, pic.h, pic.tonemap, pic.tenBit, burn)
+	switch {
+	case gpuOK && !gpuOff:
+		inputArgs = append(inputArgs, gpuInput...)
+		chain = append(chain, gpuFilters...)
+		if pic.setSAR != "" {
+			chain = append(chain, pic.setSAR)
+		}
+		hwFrames = true
+	case accel == AccelVideoToolbox && pic.tonemap && !gpuOff && !burn && s.Features.hasFilter("scale_vt"):
+		// Decode, tone-map and scale on the GPU.
+		inputArgs = append(inputArgs, "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld")
+		chain = append(chain, fmt.Sprintf("scale_vt=w=%d:h=%d:color_matrix=bt709:color_primaries=bt709:color_transfer=bt709", pic.w, pic.h))
+		hwFrames = true
+	case accel == AccelVAAPI && !burn && !gpuOff && (!pic.tonemap || s.Features.hasFilter("tonemap_vaapi")):
+		dev := s.Accel.Device
+		if dev == "" {
+			dev = DefaultVAAPIDevice
+		}
+		inputArgs = append(inputArgs, "-hwaccel", "vaapi", "-hwaccel_device", dev, "-hwaccel_output_format", "vaapi")
+		if pic.tonemap {
+			chain = append(chain, "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709")
+		}
+		f := "nv12"
+		if pic.tenBit {
+			f = "p010"
+		}
+		chain = append(chain, fmt.Sprintf("scale_vaapi=w=%d:h=%d:format=%s", pic.w, pic.h, f))
+		if pic.setSAR != "" {
+			chain = append(chain, pic.setSAR)
+		}
+		hwFrames = true
+	case accel == AccelVideoToolbox:
+		inputArgs = append(inputArgs, "-hwaccel", "videotoolbox")
+	case accel == AccelNVENC && !(v.Codec == "h264" && v.BitDepth > 8):
+		inputArgs = append(inputArgs, "-hwaccel", "cuda")
+	case accel == AccelVAAPI:
+		dev := s.Accel.Device
+		if dev == "" {
+			dev = DefaultVAAPIDevice
+		}
+		inputArgs = append(inputArgs, "-vaapi_device", dev)
+	}
+
+	if !hwFrames {
+		switch {
+		case pic.convert != "":
+			chain = append(chain, pic.convert)
+		case pic.tonemap:
+			chain = append(chain, cpuToneMap(s.Features))
+		}
+		if !burn {
+			chain = finish(chain)
+		}
+	}
+	return inputArgs, chain, hwFrames
+}
+
+// planEncodeArgs builds the encoder invocation: rate control, the selected
+// encoder's preset/quality options and the output colour tags.
+func planEncodeArgs(s runSpec, pic picturePlan, enc, codec string, hwFrames bool) []string {
+	// Encoder.
+	videoKbps := videoBitrate(s.Info, s.Decision)
+	if s.Rate.TargetKbps > 0 {
+		videoKbps = s.Rate.TargetKbps
+	}
+	b := fmt.Sprintf("%dk", videoKbps)
+	maxr := fmt.Sprintf("%dk", videoKbps*3/2)
+	buf := fmt.Sprintf("%dk", videoKbps*2)
+	if s.Rate.MaxrateKbps > 0 {
+		maxr = fmt.Sprintf("%dk", s.Rate.MaxrateKbps)
+	}
+	if s.Rate.BufsizeKbps > 0 {
+		buf = fmt.Sprintf("%dk", s.Rate.BufsizeKbps)
+	}
+	e := []string{"-c:v", enc}
+	xPreset := "veryfast"
+	if s.FastStart {
+		xPreset = "ultrafast"
+	}
+	switch enc {
+	case "libx264":
+		// Preserve fine detail at the bounded software thread budget. The
+		// natural-footage baseline validates CRF 18 at the same VBV cap;
+		// throughput improvements must not rely on lowering image quality.
+		crf := "18"
+		threads := strconv.Itoa(softwareThreadBudget(pic.w, pic.h, runtime.GOMAXPROCS(0)))
+		if s.Rate.Quality {
+			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", maxr, "-bufsize", buf, "-profile:v", "high", "-threads", threads)
+		} else {
+			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", b, "-bufsize", buf, "-profile:v", "high", "-threads", threads)
+		}
+		if s.FastStart {
+			e = append(e, "-tune", "zerolatency")
+		}
+	case "libx265":
+		params := "log-level=error"
+		if pic.outRange != rangeSDR {
+			params += hdrX265Params(pic.outRange)
+		}
+		peak := b
+		if s.Rate.Quality {
+			peak = maxr
+		}
+		e = append(e, "-preset", xPreset, "-crf", "23", "-maxrate", peak, "-bufsize", buf, "-x265-params", params)
+	case "h264_videotoolbox", "hevc_videotoolbox":
+		if s.Rate.Quality {
+			e = append(e, "-q:v", "65", "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "0")
+		} else {
+			e = append(e, "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "0")
+		}
+		if s.FastStart {
+			e = append(e, "-realtime", "1")
+		}
+		if enc == "h264_videotoolbox" {
+			e = append(e, "-profile:v", "high")
+		} else if pic.tenBit {
+			e = append(e, "-profile:v", "main10")
+		}
+	case "h264_nvenc", "hevc_nvenc":
+		preset := "p4"
+		if s.FastStart {
+			preset = "p1"
+		}
+		if s.Rate.Quality {
+			e = append(e, "-preset", preset, "-rc", "vbr", "-cq", "21", "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
+		} else {
+			e = append(e, "-preset", preset, "-rc", "vbr", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
+		}
+		if enc == "h264_nvenc" {
+			e = append(e, "-profile:v", "high")
+		} else if pic.tenBit {
+			e = append(e, "-profile:v", "main10")
+		}
+	case "h264_qsv", "hevc_qsv":
+		if s.Rate.Quality {
+			e = append(e, "-preset", "veryfast", "-global_quality", "23", "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "1")
+		} else {
+			e = append(e, "-preset", "veryfast", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "0")
+		}
+		if enc == "h264_qsv" {
+			e = append(e, "-profile:v", "high")
+		} else if pic.tenBit {
+			e = append(e, "-profile:v", "main10")
+		}
+	case "h264_vaapi", "hevc_vaapi":
+		if s.Rate.Quality {
+			e = append(e, "-rc_mode", "QVBR", "-global_quality", "23", "-maxrate", maxr, "-bufsize", buf)
+		} else {
+			e = append(e, "-rc_mode", "VBR", "-b:v", b, "-maxrate", maxr, "-bufsize", buf)
+		}
+		if enc == "h264_vaapi" {
+			e = append(e, "-profile:v", "high")
+		} else if pic.tenBit {
+			e = append(e, "-profile:v", "main10")
+		}
+	}
+	if codec == "hevc" {
+		e = append(e, "-tag:v", "hvc1")
+	}
+	// Tag the output colours. Not with GPU frames: the hardware filters set
+	// them, and output colour options make ffmpeg insert a software
+	// conversion that cannot take hardware frames.
+	switch {
+	case hwFrames:
+	case s.Target != nil:
+		trc := "bt709"
+		switch pic.outRange {
+		case rangeHDR10:
+			trc = "smpte2084"
+		case rangeHLG:
+			trc = "arib-std-b67"
+		}
+		// Range follows the frames: zscale converts it, else the source's
+		// already matches (convertsColour).
+		e = append(e, "-color_primaries", s.Target.pic.prim, "-color_trc", trc, "-colorspace", s.Target.pic.matrix)
+	case pic.outRange != rangeSDR:
+		trc := "smpte2084"
+		if pic.outRange == rangeHLG {
+			trc = "arib-std-b67"
+		}
+		e = append(e, "-color_primaries", "bt2020", "-color_trc", trc, "-colorspace", "bt2020nc")
+	default:
+		e = append(e, "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709")
+	}
+	return e
+}
+
 // planVideo builds decode/filter/encode arguments for a video transcode.
 func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	d := s.Decision
@@ -557,47 +809,13 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	if hw {
 		accel = s.Accel.Name
 	}
-	w, h := outputSize(v.Width, v.Height, d.MaxHeight)
-	scaling := v.Height > 0 && h < v.Height
-	// Keep HDR only where HEVC can carry the decoded picture's HDR10/HLG;
-	// any other HDR picture is tone mapped (8-bit SDR output), and an SDR
-	// picture (a Dolby Vision SDR base layer) never is.
-	keepHDR := keepsHDR(v) && !d.ToneMap && codec == "hevc"
-	tonemap := encodedRange(v) != rangeSDR && !keepHDR
-	// tenBit and outRange describe the encoded picture; without a
-	// contract they follow keepHDR.
-	tenBit, outRange := keepHDR, rangeSDR
-	if keepHDR {
-		outRange = encodedRange(v)
-	}
-	convert, pad, setSAR := "", false, ""
-	if t := s.Target; t != nil {
-		// A static-header session: encode the contract's picture
-		// whatever this source is (contract.go).
-		picture := *v
-		if s.PictureCrop != nil {
-			picture.Width, picture.Height = s.PictureCrop.width, s.PictureCrop.height
-		}
-		w, h = t.fit(&picture)
-		scaling = w != picture.Width || h != picture.Height
-		pad = w != t.width || h != t.height
-		tenBit, outRange = t.depth == 10, t.rng
-		tonemap = t.tonemaps(v)
-		if t.convertsColour(v) {
-			convert = zscaleColour(v, t)
-		}
-		// scale keeps the display aspect: its output SAR follows the source's.
-		src := pictureOf(v)
-		if n, dd := reduce(src.sarNum*picture.Width*h, src.sarDen*picture.Height*w); pad || n != t.pic.sarNum || dd != t.pic.sarDen {
-			setSAR = fmt.Sprintf("setsar=%d/%d", t.pic.sarNum, t.pic.sarDen)
-		}
-	}
+	pic := planPicture(s, v, codec)
 	sub := findStream(s.Info, d.SubtitleStream, "subtitle")
 	burn := d.BurnSubtitles && sub != nil
 
 	// Software pixel format the encoder receives.
 	swFmt := "yuv420p"
-	if tenBit {
+	if pic.tenBit {
 		swFmt = "yuv420p10le"
 		if hw {
 			swFmt = "p010le"
@@ -610,14 +828,14 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		if crop := s.PictureCrop; crop != nil {
 			c = append(c, fmt.Sprintf("crop=%d:%d:%d:%d", crop.width, crop.height, crop.x, crop.y))
 		}
-		if scaling {
-			c = append(c, fmt.Sprintf("scale=%d:%d", w, h))
+		if pic.scaling {
+			c = append(c, fmt.Sprintf("scale=%d:%d", pic.w, pic.h))
 		}
-		if pad {
+		if pic.pad {
 			c = append(c, fmt.Sprintf("pad=%d:%d:(ow-iw)/2:(oh-ih)/2", s.Target.width, s.Target.height))
 		}
-		if setSAR != "" {
-			c = append(c, setSAR)
+		if pic.setSAR != "" {
+			c = append(c, pic.setSAR)
 		}
 		c = append(c, "format="+swFmt)
 		if accel == AccelVAAPI {
@@ -625,68 +843,10 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		}
 		return c
 	}
-	// Software filters only: GPU scalers neither pad nor convert SDR to
-	// HDR, and their 8-bit tone-map paths cannot feed a 10-bit contract.
-	gpuOff := s.PictureCrop != nil || pad || convert != "" || (tonemap && tenBit)
 
 	in := fmt.Sprintf("[0:%d]", v.Index)
-	var chain []string
-	hwFrames := false
-	gpuInput, gpuFilters, gpuOK := gpuPipeline(s, accel, w, h, tonemap, tenBit, burn)
-	switch {
-	case gpuOK && !gpuOff:
-		p.inputArgs = append(p.inputArgs, gpuInput...)
-		chain = append(chain, gpuFilters...)
-		if setSAR != "" {
-			chain = append(chain, setSAR)
-		}
-		hwFrames = true
-	case accel == AccelVideoToolbox && tonemap && !gpuOff && !burn && s.Features.hasFilter("scale_vt"):
-		// Decode, tone-map and scale on the GPU.
-		p.inputArgs = append(p.inputArgs, "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld")
-		chain = append(chain, fmt.Sprintf("scale_vt=w=%d:h=%d:color_matrix=bt709:color_primaries=bt709:color_transfer=bt709", w, h))
-		hwFrames = true
-	case accel == AccelVAAPI && !burn && !gpuOff && (!tonemap || s.Features.hasFilter("tonemap_vaapi")):
-		dev := s.Accel.Device
-		if dev == "" {
-			dev = DefaultVAAPIDevice
-		}
-		p.inputArgs = append(p.inputArgs, "-hwaccel", "vaapi", "-hwaccel_device", dev, "-hwaccel_output_format", "vaapi")
-		if tonemap {
-			chain = append(chain, "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709")
-		}
-		f := "nv12"
-		if tenBit {
-			f = "p010"
-		}
-		chain = append(chain, fmt.Sprintf("scale_vaapi=w=%d:h=%d:format=%s", w, h, f))
-		if setSAR != "" {
-			chain = append(chain, setSAR)
-		}
-		hwFrames = true
-	case accel == AccelVideoToolbox:
-		p.inputArgs = append(p.inputArgs, "-hwaccel", "videotoolbox")
-	case accel == AccelNVENC && !(v.Codec == "h264" && v.BitDepth > 8):
-		p.inputArgs = append(p.inputArgs, "-hwaccel", "cuda")
-	case accel == AccelVAAPI:
-		dev := s.Accel.Device
-		if dev == "" {
-			dev = DefaultVAAPIDevice
-		}
-		p.inputArgs = append(p.inputArgs, "-vaapi_device", dev)
-	}
-
-	if !hwFrames {
-		switch {
-		case convert != "":
-			chain = append(chain, convert)
-		case tonemap:
-			chain = append(chain, cpuToneMap(s.Features))
-		}
-		if !burn {
-			chain = finish(chain)
-		}
-	}
+	chainInput, chain, hwFrames := planFilterChain(s, v, pic, accel, burn, finish)
+	p.inputArgs = append(p.inputArgs, chainInput...)
 
 	var graph string
 	switch {
@@ -729,131 +889,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	}
 	p.graph = graph
 
-	// Encoder.
-	videoKbps := videoBitrate(s.Info, d)
-	if s.Rate.TargetKbps > 0 {
-		videoKbps = s.Rate.TargetKbps
-	}
-	b := fmt.Sprintf("%dk", videoKbps)
-	maxr := fmt.Sprintf("%dk", videoKbps*3/2)
-	buf := fmt.Sprintf("%dk", videoKbps*2)
-	if s.Rate.MaxrateKbps > 0 {
-		maxr = fmt.Sprintf("%dk", s.Rate.MaxrateKbps)
-	}
-	if s.Rate.BufsizeKbps > 0 {
-		buf = fmt.Sprintf("%dk", s.Rate.BufsizeKbps)
-	}
-	e := []string{"-c:v", enc}
-	xPreset := "veryfast"
-	if s.FastStart {
-		xPreset = "ultrafast"
-	}
-	switch enc {
-	case "libx264":
-		// Preserve fine detail at the bounded software thread budget. The
-		// natural-footage baseline validates CRF 18 at the same VBV cap;
-		// throughput improvements must not rely on lowering image quality.
-		crf := "18"
-		threads := strconv.Itoa(softwareThreadBudget(w, h, runtime.GOMAXPROCS(0)))
-		if s.Rate.Quality {
-			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", maxr, "-bufsize", buf, "-profile:v", "high", "-threads", threads)
-		} else {
-			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", b, "-bufsize", buf, "-profile:v", "high", "-threads", threads)
-		}
-		if s.FastStart {
-			e = append(e, "-tune", "zerolatency")
-		}
-	case "libx265":
-		params := "log-level=error"
-		if outRange != rangeSDR {
-			params += hdrX265Params(outRange)
-		}
-		peak := b
-		if s.Rate.Quality {
-			peak = maxr
-		}
-		e = append(e, "-preset", xPreset, "-crf", "23", "-maxrate", peak, "-bufsize", buf, "-x265-params", params)
-	case "h264_videotoolbox", "hevc_videotoolbox":
-		if s.Rate.Quality {
-			e = append(e, "-q:v", "65", "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "0")
-		} else {
-			e = append(e, "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "0")
-		}
-		if s.FastStart {
-			e = append(e, "-realtime", "1")
-		}
-		if enc == "h264_videotoolbox" {
-			e = append(e, "-profile:v", "high")
-		} else if tenBit {
-			e = append(e, "-profile:v", "main10")
-		}
-	case "h264_nvenc", "hevc_nvenc":
-		preset := "p4"
-		if s.FastStart {
-			preset = "p1"
-		}
-		if s.Rate.Quality {
-			e = append(e, "-preset", preset, "-rc", "vbr", "-cq", "21", "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
-		} else {
-			e = append(e, "-preset", preset, "-rc", "vbr", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
-		}
-		if enc == "h264_nvenc" {
-			e = append(e, "-profile:v", "high")
-		} else if tenBit {
-			e = append(e, "-profile:v", "main10")
-		}
-	case "h264_qsv", "hevc_qsv":
-		if s.Rate.Quality {
-			e = append(e, "-preset", "veryfast", "-global_quality", "23", "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "1")
-		} else {
-			e = append(e, "-preset", "veryfast", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "0")
-		}
-		if enc == "h264_qsv" {
-			e = append(e, "-profile:v", "high")
-		} else if tenBit {
-			e = append(e, "-profile:v", "main10")
-		}
-	case "h264_vaapi", "hevc_vaapi":
-		if s.Rate.Quality {
-			e = append(e, "-rc_mode", "QVBR", "-global_quality", "23", "-maxrate", maxr, "-bufsize", buf)
-		} else {
-			e = append(e, "-rc_mode", "VBR", "-b:v", b, "-maxrate", maxr, "-bufsize", buf)
-		}
-		if enc == "h264_vaapi" {
-			e = append(e, "-profile:v", "high")
-		} else if tenBit {
-			e = append(e, "-profile:v", "main10")
-		}
-	}
-	if codec == "hevc" {
-		e = append(e, "-tag:v", "hvc1")
-	}
-	// Tag the output colours. Not with GPU frames: the hardware filters set
-	// them, and output colour options make ffmpeg insert a software
-	// conversion that cannot take hardware frames.
-	switch {
-	case hwFrames:
-	case s.Target != nil:
-		trc := "bt709"
-		switch outRange {
-		case rangeHDR10:
-			trc = "smpte2084"
-		case rangeHLG:
-			trc = "arib-std-b67"
-		}
-		// Range follows the frames: zscale converts it, else the source's
-		// already matches (convertsColour).
-		e = append(e, "-color_primaries", s.Target.pic.prim, "-color_trc", trc, "-colorspace", s.Target.pic.matrix)
-	case outRange != rangeSDR:
-		trc := "smpte2084"
-		if outRange == rangeHLG {
-			trc = "arib-std-b67"
-		}
-		e = append(e, "-color_primaries", "bt2020", "-color_trc", trc, "-colorspace", "bt2020nc")
-	default:
-		e = append(e, "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709")
-	}
-	p.encodeArgs = e
+	p.encodeArgs = planEncodeArgs(s, pic, enc, codec, hwFrames)
 	return p
 }
 

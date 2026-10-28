@@ -362,6 +362,89 @@ func clientName(caps core.ClientCaps) string {
 	return "client"
 }
 
+// issueContext groups the already-computed limits and flags collectIssues
+// reads, so the helper stays pure without a long parameter list.
+type issueContext struct {
+	caps         core.ClientCaps
+	heightCap    int
+	bitrateCap   int
+	burn         bool
+	audioFilters []string
+}
+
+// collectIssues lists, in order, what blocks keeping the video, the audio
+// and the stream as they are.
+func collectIssues(info core.MediaInfo, v, a, sub *core.StreamInfo, ctx issueContext) (videoIssues, audioIssues, otherIssues []string) {
+	caps := ctx.caps
+	if v != nil {
+		if len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(v.Codec) {
+			videoIssues = append(videoIssues, fmt.Sprintf("video codec %s not supported", v.Codec))
+		}
+		if profiles := caps.VideoProfiles[v.Codec]; len(profiles) > 0 {
+			supported := false
+			for _, p := range profiles {
+				if strings.EqualFold(p, v.Profile) {
+					supported = true
+				}
+			}
+			if !supported {
+				videoIssues = append(videoIssues, fmt.Sprintf("video profile %s not supported", v.Profile))
+			}
+		}
+		if level := caps.VideoLevels[v.Codec]; level > 0 && v.Level > level {
+			videoIssues = append(videoIssues, fmt.Sprintf("video level %d exceeds %d", v.Level, level))
+		}
+		if ctx.heightCap > 0 && v.Height > ctx.heightCap {
+			videoIssues = append(videoIssues, fmt.Sprintf("%dp exceeds %dp limit", v.Height, ctx.heightCap))
+		}
+		if r := rangeOK(v, caps); r != "" {
+			videoIssues = append(videoIssues, r)
+		}
+	}
+	if a != nil && len(caps.AudioCodecs) > 0 && !caps.SupportsAudio(a.Codec) {
+		audioIssues = append(audioIssues, fmt.Sprintf("audio codec %s not supported", a.Codec))
+	}
+	if a != nil && len(ctx.audioFilters) > 0 {
+		audioIssues = append(audioIssues, "audio processing requested")
+	}
+	if ctx.bitrateCap > 0 && info.BitrateKbps > ctx.bitrateCap {
+		otherIssues = append(otherIssues, fmt.Sprintf("bitrate %d kbps exceeds %d kbps limit", info.BitrateKbps, ctx.bitrateCap))
+	}
+	if ctx.burn {
+		otherIssues = append(otherIssues, fmt.Sprintf("%s subtitles must be burned in", sub.Codec))
+	}
+	return videoIssues, audioIssues, otherIssues
+}
+
+// planAudio is the audio plan shared by remux and transcode: copy when the
+// codec is supported and carried in HLS, else transcode to the client's
+// target; on a narrow connection, high-bitrate audio is converted to
+// stereo AAC to preserve room for video.
+func planAudio(a *core.StreamInfo, caps core.ClientCaps, audioIssues []string, bitrateCap int) (audioCopy bool, audioCodec string, audioKbps int, audioNote string) {
+	audioCopy = a == nil || (len(audioIssues) == 0 && hlsAudioOK(a.Codec))
+	if a != nil {
+		if audioCopy {
+			audioCodec = a.Codec
+			audioKbps = copiedAudioKbps(a)
+		} else {
+			audioCodec = audioTarget(caps, a)
+			ch := outputChannels(audioCodec, a)
+			audioKbps = audioBitrateKbps(audioCodec, ch)
+			audioNote = fmt.Sprintf("audio %s %s -> %s %dch", a.Codec, channelLabel(a), audioCodec, ch)
+			if len(audioIssues) == 0 {
+				audioNote += " (not carried in HLS)"
+			}
+		}
+	}
+	if a != nil && bitrateCap > 0 && bitrateCap < 3000 && audioKbps > bitrateCap/4 &&
+		(caps.SupportsAudio("aac") || len(caps.AudioCodecs) == 0) {
+		audioCopy, audioCodec = false, "aac"
+		audioKbps = audioBitrateKbps(audioCodec, 2)
+		audioNote = "audio converted to stereo AAC to fit connection bitrate"
+	}
+	return audioCopy, audioCodec, audioKbps, audioNote
+}
+
 // Decide chooses direct play, remux into HLS, or full transcode, in that
 // order of preference, and explains why in Decision.Reason.
 func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, pol Policy) core.Decision {
@@ -390,44 +473,9 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 	}
 
 	// What blocks keeping the video and audio as they are.
-	var videoIssues, audioIssues, otherIssues []string
-	if v != nil {
-		if len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(v.Codec) {
-			videoIssues = append(videoIssues, fmt.Sprintf("video codec %s not supported", v.Codec))
-		}
-		if profiles := caps.VideoProfiles[v.Codec]; len(profiles) > 0 {
-			supported := false
-			for _, p := range profiles {
-				if strings.EqualFold(p, v.Profile) {
-					supported = true
-				}
-			}
-			if !supported {
-				videoIssues = append(videoIssues, fmt.Sprintf("video profile %s not supported", v.Profile))
-			}
-		}
-		if level := caps.VideoLevels[v.Codec]; level > 0 && v.Level > level {
-			videoIssues = append(videoIssues, fmt.Sprintf("video level %d exceeds %d", v.Level, level))
-		}
-		if heightCap > 0 && v.Height > heightCap {
-			videoIssues = append(videoIssues, fmt.Sprintf("%dp exceeds %dp limit", v.Height, heightCap))
-		}
-		if r := rangeOK(v, caps); r != "" {
-			videoIssues = append(videoIssues, r)
-		}
-	}
-	if a != nil && len(caps.AudioCodecs) > 0 && !caps.SupportsAudio(a.Codec) {
-		audioIssues = append(audioIssues, fmt.Sprintf("audio codec %s not supported", a.Codec))
-	}
-	if a != nil && len(d.AudioFilters) > 0 {
-		audioIssues = append(audioIssues, "audio processing requested")
-	}
-	if bitrateCap > 0 && info.BitrateKbps > bitrateCap {
-		otherIssues = append(otherIssues, fmt.Sprintf("bitrate %d kbps exceeds %d kbps limit", info.BitrateKbps, bitrateCap))
-	}
-	if burn {
-		otherIssues = append(otherIssues, fmt.Sprintf("%s subtitles must be burned in", sub.Codec))
-	}
+	videoIssues, audioIssues, otherIssues := collectIssues(info, v, a, sub, issueContext{
+		caps: caps, heightCap: heightCap, bitrateCap: bitrateCap, burn: burn, audioFilters: d.AudioFilters,
+	})
 	containerOK := len(caps.Containers) == 0 || caps.SupportsContainer(info.Container)
 	name := clientName(caps)
 
@@ -477,35 +525,7 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 	why = append(why, otherIssues...)
 
 	// Audio plan, shared by remux and transcode.
-	audioCopy := a == nil || (len(audioIssues) == 0 && hlsAudioOK(a.Codec))
-	audioCodec := ""
-	audioKbps := 0
-	var audioNote string
-	if a != nil {
-		if audioCopy {
-			audioCodec = a.Codec
-			audioKbps = copiedAudioKbps(a)
-		} else {
-			audioCodec = audioTarget(caps, a)
-			ch := outputChannels(audioCodec, a)
-			audioKbps = audioBitrateKbps(audioCodec, ch)
-			audioNote = fmt.Sprintf("audio %s %s -> %s %dch", a.Codec, channelLabel(a), audioCodec, ch)
-			if len(audioIssues) == 0 {
-				audioNote += " (not carried in HLS)"
-			}
-		}
-	}
-
-	// On a narrow connection, copying high-bitrate surround can consume
-	// most of the entire stream budget. Preserve room for video using
-	// stereo AAC when the client supports it. Fast connections keep the
-	// original audio plan.
-	if a != nil && bitrateCap > 0 && bitrateCap < 3000 && audioKbps > bitrateCap/4 &&
-		(caps.SupportsAudio("aac") || len(caps.AudioCodecs) == 0) {
-		audioCopy, audioCodec = false, "aac"
-		audioKbps = audioBitrateKbps(audioCodec, 2)
-		audioNote = "audio converted to stereo AAC to fit connection bitrate"
-	}
+	audioCopy, audioCodec, audioKbps, audioNote := planAudio(a, caps, audioIssues, bitrateCap)
 
 	// 2. Remux: copy video into HLS.
 	videoCopyable := v == nil || (len(videoIssues) == 0 && hlsVideoOK(v.Codec))
