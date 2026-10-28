@@ -46,7 +46,7 @@ export default function Logs() {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.logs({ limit: 1000, level, q: query });
+      const r = await api.logs({ limit: 200, level, q: query });
       setEntries(
         [...(r.entries ?? [])].reverse().sort((a, b) => Date.parse(b.time) - Date.parse(a.time)),
       );
@@ -89,7 +89,8 @@ export default function Logs() {
     <section aria-label="Logs" className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-fg-muted">
-          Newest entries first. {total.toLocaleString()} entries retained in memory.
+          Newest entries first. Showing {entries?.length ?? 0} of {total.toLocaleString()}{" "}
+          entries retained in memory.
         </p>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => void load()}>

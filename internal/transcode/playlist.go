@@ -65,6 +65,7 @@ func segmentLength(i, n int, span, segDur time.Duration) time.Duration {
 func mediaPlaylist(span, segDur time.Duration, container string, name func(n int) string) []byte {
 	var b bytes.Buffer
 	n := segmentCount(span, segDur)
+	b.Grow(n * 48)
 	version := 3
 	if hasInitSegment(container) {
 		version = 7
@@ -108,6 +109,7 @@ func eventPlaylist(done []int, segDur time.Duration, container string, ended boo
 	if hasInitSegment(container) {
 		fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", initSegmentName(container))
 	}
+	b.Grow(len(done) * 48)
 	for i, n := range done {
 		if n != i {
 			break

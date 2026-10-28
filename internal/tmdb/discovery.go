@@ -9,11 +9,13 @@ import (
 	"strings"
 )
 
+var languageRE = regexp.MustCompile(`^[A-Za-z]{2}(-[A-Za-z]{2})?$`)
+
 // Localized changes presentation only: certification, adult flag and identity
 // remain the canonical catalogue's responsibility, never translated API fields.
 func (c *Client) Localized(ctx context.Context, t *core.Title, language string) (*core.Title, error) {
 	out := *t
-	if !regexp.MustCompile(`^[A-Za-z]{2}(-[A-Za-z]{2})?$`).MatchString(language) {
+	if !languageRE.MatchString(language) {
 		return &out, nil
 	}
 	path, e := discoveryPath(t)

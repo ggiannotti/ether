@@ -9,8 +9,8 @@ import type { LoadGPU, SystemLoad } from "../lib/types";
 import { Meter } from "./charts";
 import { LiveChart, type LiveSeries } from "./LiveChart";
 
-/** How often the Overview refreshes load; the server samples every 2 s. */
-export const LOAD_POLL_MS = 2_000;
+/** How often the frontend polls load: every 10 s; the server samples every 2 s. */
+export const LOAD_POLL_MS = 10_000;
 
 function pct(v: number | undefined): string {
   return v === undefined || !Number.isFinite(v) ? "—" : `${Math.round(v)}%`;

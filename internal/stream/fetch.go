@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -397,6 +398,11 @@ func (e *Engine) normalize(pf *postedFile, i int, data []byte, part core.Article
 // Multi-article repaired spans use ETS3 so older binaries ignore those entries.
 const segMagic = "ETS2"
 
+var (
+	segMagicBytes  = []byte(segMagic)
+	segMagic3Bytes = []byte("ETS3")
+)
+
 func encodeSegment(s *segData) []byte {
 	name := s.name
 	if len(name) > 1024 {
@@ -426,6 +432,8 @@ func encodeSegment(s *segData) []byte {
 // ordinary segment written over the target slot cannot be mistaken for it.
 const spanRefMagic = "ETR1"
 
+var spanRefMagicBytes = []byte(spanRefMagic)
+
 func encodeSpanRef(target int, s *segData) []byte {
 	b := make([]byte, 4+8+8+8)
 	copy(b, spanRefMagic)
@@ -442,7 +450,7 @@ func (e *Engine) cachedSegment(cacheID string, global int) (*segData, bool) {
 	if !ok {
 		return nil, false
 	}
-	if len(b) != 28 || string(b[:4]) != spanRefMagic {
+	if len(b) != 28 || !bytes.Equal(b[:4], spanRefMagicBytes) {
 		return decodeSegment(b)
 	}
 	target := int(binary.LittleEndian.Uint64(b[4:]))
@@ -462,7 +470,7 @@ func (e *Engine) cachedSegment(cacheID string, global int) (*segData, bool) {
 }
 
 func decodeSegment(b []byte) (*segData, bool) {
-	if len(b) < 27 || (string(b[:4]) != segMagic && string(b[:4]) != "ETS3") {
+	if len(b) < 27 || (!bytes.Equal(b[:4], segMagicBytes) && !bytes.Equal(b[:4], segMagic3Bytes)) {
 		return nil, false
 	}
 	begin := int64(binary.LittleEndian.Uint64(b[4:]))

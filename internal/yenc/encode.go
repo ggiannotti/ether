@@ -29,7 +29,6 @@ type EncodeOptions struct {
 
 // escape classes for encoded output characters.
 const (
-	escNever  = 0
 	escAlways = 1 // NUL, LF, CR, '='
 	escEdge   = 2 // TAB, SPACE: escape at line start or end
 	escStart  = 3 // '.': escape at line start

@@ -75,7 +75,7 @@ func DecodeLines(lr LineReader, opt *DecodeOptions) (*Part, error) {
 		if len(line) > MaxLineSize {
 			return nil, fmt.Errorf("%w: encoded line exceeds %d bytes", ErrTooLarge, MaxLineSize)
 		}
-		if bytes.HasPrefix(line, []byte(keyBegin)) {
+		if bytes.HasPrefix(line, keyBeginBytes) {
 			h, err := ParseBegin(line)
 			if err != nil {
 				return nil, err
@@ -138,7 +138,7 @@ func DecodeLines(lr LineReader, opt *DecodeOptions) (*Part, error) {
 		}
 		if first {
 			first = false
-			if bytes.HasPrefix(line, []byte(keyPart)) {
+			if bytes.HasPrefix(line, keyPartBytes) {
 				if err := ParsePart(line, &p.Header); err != nil {
 					return nil, err
 				}
@@ -151,7 +151,7 @@ func DecodeLines(lr LineReader, opt *DecodeOptions) (*Part, error) {
 				return nil, err
 			}
 		}
-		if len(line) >= len(keyEnd) && line[0] == '=' && line[1] == 'y' && bytes.HasPrefix(line, []byte(keyEnd)) {
+		if len(line) >= len(keyEnd) && line[0] == '=' && line[1] == 'y' && bytes.HasPrefix(line, keyEndBytes) {
 			if escaped {
 				p.Data = dst
 				return p, fmt.Errorf("%w: dangling escape before =yend", ErrMalformed)

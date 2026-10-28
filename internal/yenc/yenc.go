@@ -79,6 +79,12 @@ const (
 	keyEnd   = "=yend"
 )
 
+var (
+	keyBeginBytes = []byte(keyBegin)
+	keyPartBytes  = []byte(keyPart)
+	keyEndBytes   = []byte(keyEnd)
+)
+
 // parseFields splits "k1=v1 k2=v2 name=rest of line" into a map. If nameLast
 // is true, "name=" swallows the rest of the line (file names may contain
 // spaces and '=').
@@ -137,7 +143,7 @@ func fieldCRC(f map[string]string, k string) (uint32, bool, error) {
 // ParseBegin parses a "=ybegin ..." line.
 func ParseBegin(line []byte) (Header, error) {
 	var h Header
-	if !bytes.HasPrefix(line, []byte(keyBegin)) {
+	if !bytes.HasPrefix(line, keyBeginBytes) {
 		return h, fmt.Errorf("%w: not a =ybegin line", ErrMalformed)
 	}
 	f, name, hasName := parseFields(line[len(keyBegin):], true)
@@ -174,7 +180,7 @@ func ParseBegin(line []byte) (Header, error) {
 
 // ParsePart parses a "=ypart ..." line into h.
 func ParsePart(line []byte, h *Header) error {
-	if !bytes.HasPrefix(line, []byte(keyPart)) {
+	if !bytes.HasPrefix(line, keyPartBytes) {
 		return fmt.Errorf("%w: not a =ypart line", ErrMalformed)
 	}
 	f, _, _ := parseFields(line[len(keyPart):], false)
@@ -199,7 +205,7 @@ func ParsePart(line []byte, h *Header) error {
 // ParseEnd parses a "=yend ..." line.
 func ParseEnd(line []byte) (Trailer, error) {
 	var t Trailer
-	if !bytes.HasPrefix(line, []byte(keyEnd)) {
+	if !bytes.HasPrefix(line, keyEndBytes) {
 		return t, fmt.Errorf("%w: not a =yend line", ErrMalformed)
 	}
 	f, _, _ := parseFields(line[len(keyEnd):], false)
