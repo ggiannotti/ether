@@ -201,7 +201,9 @@ func (s *sessionStore) load(ctx context.Context, indexerID, origin string) (sess
 	if err != nil {
 		return r, false, fmt.Errorf("%w: %v", errSessionUnreadable, err)
 	}
-	_ = json.Unmarshal([]byte(plain), &r.Cookies)
+	if err := json.Unmarshal([]byte(plain), &r.Cookies); err != nil {
+		return r, false, fmt.Errorf("%w: %v", errSessionUnreadable, err)
+	}
 	r.UserAgent, r.UpdatedAt = ua, time.Unix(at, 0)
 	if legacy {
 		s.reseal(ctx, indexerID, origin, raw, plain)

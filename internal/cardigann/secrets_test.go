@@ -70,6 +70,38 @@ func TestSessionCookiesSealedAndBoundToOrigin(t *testing.T) {
 	}
 }
 
+func TestSessionCorruptSealedCookiesUnreadable(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := &sessionStore{db: db, sealer: upgradedSealer(t), now: time.Now}
+	if _, err := s.save(ctx, "ix", "https://site.test", []savedCookie{{Name: "uid", Value: "session-cookie-value"}}, "UA"); err != nil {
+		t.Fatal(err)
+	}
+	// A valid seal around corrupted JSON: OpenWith succeeds, but the
+	// payload cannot unmarshal, so the session is unreadable.
+	corrupt, err := config.SealWith(s.sealer, "{corrupt-json", cookieContext("ix", "https://site.test")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE cardigann_sessions SET cookies=? WHERE indexer_id=?`, corrupt, "ix"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.load(ctx, "ix", "https://site.test"); !errors.Is(err, errSessionUnreadable) {
+		t.Fatalf("corrupt sealed cookies: %v", err)
+	}
+	// The runner treats an unreadable session as no session, so the next
+	// login replaces it.
+	site, _ := url.Parse("https://site.test/")
+	r := &Runner{id: "ix", site: site, sessions: s, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if _, ok, err := r.loadSession(ctx); ok || err != nil {
+		t.Fatalf("runner reused corrupt session: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestSessionCookieMigration(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.OpenMemory(ctx)

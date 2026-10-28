@@ -98,12 +98,6 @@ done:
 	return n
 }
 
-func coerceFloat(s string) float64 {
-	s = strings.TrimSpace(strings.ReplaceAll(s, ",", "."))
-	f, _ := strconv.ParseFloat(s, 64)
-	return f
-}
-
 // --- dates ------------------------------------------------------------------
 
 var errDate = errors.New("unrecognised date")

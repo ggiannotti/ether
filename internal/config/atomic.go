@@ -47,8 +47,14 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	ok = true
 	if runtime.GOOS != "windows" {
 		if d, err := os.Open(dir); err == nil {
-			_ = d.Sync()
-			d.Close()
+			if err := d.Sync(); err != nil {
+				_ = d.Close()
+				return err
+			}
+			// Close of a read-only directory after a successful Sync can
+			// report a spurious failure even though the rename is already
+			// durable; do not turn that into a failed write.
+			_ = d.Close()
 		}
 	}
 	return nil
