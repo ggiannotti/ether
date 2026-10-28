@@ -99,6 +99,11 @@ func (b *breaker) success() {
 	b.mu.Unlock()
 }
 
+// cappedDouble doubles d, clamped to [lo, hi].
+func cappedDouble(d, lo, hi time.Duration) time.Duration {
+	return min(max(d*2, lo), hi)
+}
+
 // connFailure records a failed dial and returns the backoff now in force.
 func (b *breaker) connFailure(err error) time.Duration {
 	b.mu.Lock()
@@ -110,7 +115,7 @@ func (b *breaker) connFailure(err error) time.Duration {
 	}
 	d := b.minBackoff
 	for i := b.failThreshold; i < b.failures && d < b.maxBackoff; i++ {
-		d *= 2
+		d = cappedDouble(d, b.minBackoff, b.maxBackoff)
 	}
 	if d > b.maxBackoff {
 		d = b.maxBackoff
@@ -137,7 +142,7 @@ func (b *breaker) authFailure(err error) time.Duration {
 	b.authFails++
 	d := b.authMin
 	for i := 1; i < b.authFails && d < b.authMax; i++ {
-		d *= 2
+		d = cappedDouble(d, b.authMin, b.authMax)
 	}
 	d = min(d, b.authMax)
 	b.authUntil = now.Add(d)

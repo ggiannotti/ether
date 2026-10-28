@@ -82,11 +82,13 @@ func TestBodyBurstUsesEveryIdleConnection(t *testing.T) {
 	})
 	f := newFetcher(t, []config.UsenetProvider{s.Provider("burst", 4)}, Options{MinIdle: -1})
 	done := make(chan error, 4)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Generous bounds: this asserts all four sockets fill, not timing, and
+	// loaded CI machines can be slow to dial and schedule the workers.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	for i := range 4 {
 		go func(i int) {
-			_, _, err := f.BodyPartBurst(ctx, fmt.Sprintf("burst%d@test", i), nil, core.PriorityReadahead, time.Now().Add(time.Second))
+			_, _, err := f.BodyPartBurst(ctx, fmt.Sprintf("burst%d@test", i), nil, core.PriorityReadahead, time.Now().Add(10*time.Second))
 			done <- err
 		}(i)
 	}

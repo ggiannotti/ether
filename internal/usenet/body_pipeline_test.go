@@ -158,6 +158,94 @@ func TestBodyPipelineIntegratedBoundAndWire(t *testing.T) {
 	}
 }
 
+// A worker that has dequeued a flight must not pipeline queued flights that
+// a spawned-but-idle sibling worker could serve in parallel on a free socket.
+// Only when no socket is free for the sibling does pipelining win.
+func TestBodyWorkerLeavesQueuedFlightsForPendingSiblings(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		freeSlot      bool
+		wantBatches   int64
+		wantPipelined int64
+	}{
+		{name: "free slot", freeSlot: true, wantBatches: 2, wantPipelined: 0},
+		{name: "no free slot", freeSlot: false, wantBatches: 1, wantPipelined: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := nntptest.Start(t, nntptest.Options{})
+			addSeg(t, s, "leader@test", []byte("leader"))
+			addSeg(t, s, "queued@test", []byte("queued"))
+			f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 3)}, Options{KeepAlive: -1, BodyPipelineDepth: 4})
+			p := f.pools[0]
+			prio := core.PriorityLive
+
+			// Build the flights by hand so the worker starts with both
+			// already queued: no request goroutine can race the batching
+			// decision (e.g. by returning a held socket a moment early).
+			newFlight := func(id string) *bodyFlight {
+				if !p.bodyAdmission.TryAcquire(prio) {
+					t.Fatal("body admission should have room")
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				return &bodyFlight{key: bodyKey{id: id, prio: prio}, ctx: ctx, cancel: cancel, done: make(chan struct{}), waiters: 1}
+			}
+			flights := []*bodyFlight{newFlight("<leader@test>"), newFlight("<queued@test>")}
+			p.bodyMu.Lock()
+			for _, fl := range flights {
+				p.bodyFlights[fl.key] = fl
+				p.bodyQueue[prio] = append(p.bodyQueue[prio], fl)
+			}
+			// One worker runs below; the second counts as a pending
+			// sibling that is spawned but never started.
+			p.bodyWorkers[prio] = 2
+			p.bodyMu.Unlock()
+
+			// With no free slot the pending sibling cannot take the
+			// queued flight in parallel, so the running worker pipelines
+			// it; with a free slot it must leave it for the sibling.
+			var held []*Conn
+			if !tc.freeSlot {
+				for range 2 {
+					c, err := p.get(context.Background(), prio)
+					if err != nil {
+						t.Fatal(err)
+					}
+					held = append(held, c)
+				}
+			}
+
+			p.bodyWG.Add(1)
+			go p.bodyWorker(prio)
+			for i, fl := range flights {
+				<-fl.done
+				if fl.err != nil {
+					t.Fatal(fl.err)
+				}
+				if want := []string{"leader", "queued"}[i]; string(fl.part.Data) != want {
+					t.Fatalf("flight %d payload %q, want %q", i, fl.part.Data, want)
+				}
+			}
+			p.bodyWG.Wait()
+			// The pending sibling never ran; drop its worker count.
+			p.bodyMu.Lock()
+			p.bodyWorkers[prio]--
+			p.bodyMu.Unlock()
+			for _, c := range held {
+				p.put(c, prio)
+			}
+			if st := p.stats(); st.BODYBatches != tc.wantBatches || st.BODYPipelined != tc.wantPipelined {
+				t.Fatalf("batches=%d pipelined=%d, want %d/%d (%+v)", st.BODYBatches, st.BODYPipelined, tc.wantBatches, tc.wantPipelined, st)
+			}
+			p.bodyMu.Lock()
+			claimed := p.bodyClaimed
+			p.bodyMu.Unlock()
+			if claimed != [numPriorities]int{} {
+				t.Fatalf("bodyClaimed = %v, want [0 0 0]", claimed)
+			}
+		})
+	}
+}
+
 func waitPipeline(t *testing.T, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

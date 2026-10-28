@@ -155,8 +155,13 @@ func (p *pool) completeBody(f *bodyFlight, part *yenc.Part, err error) {
 
 func (p *pool) bodyWorker(prio core.Priority) {
 	defer p.bodyWG.Done()
+	claimed := false
 	for {
 		p.bodyMu.Lock()
+		if claimed {
+			p.bodyClaimed[prio]--
+			claimed = false
+		}
 		q := p.bodyQueue[prio]
 		if len(q) == 0 {
 			p.bodyWorkers[prio]--
@@ -166,6 +171,8 @@ func (p *pool) bodyWorker(prio core.Priority) {
 		f := q[0]
 		q[0] = nil
 		p.bodyQueue[prio] = q[1:]
+		p.bodyClaimed[prio]++
+		claimed = true
 		p.bodyMu.Unlock()
 		if err := f.ctx.Err(); err != nil {
 			p.completeBody(f, nil, err)
@@ -200,7 +207,14 @@ func (p *pool) bodyWorker(prio core.Priority) {
 			}
 		}
 		q = p.bodyQueue[prio]
-		for i := 0; i < len(q) && len(batch) < depth; {
+		// Workers spawned but not yet holding a flight are pending siblings:
+		// if a socket is free for one of them, leave queued flights for it to
+		// serve in parallel rather than pipelining them onto this socket,
+		// where they would only be answered serially behind this batch. Only
+		// flights beyond that spare parallel capacity are pipelined here.
+		spare := min(p.bodyWorkers[prio]-p.bodyClaimed[prio], p.sem.available(prio, burstUntil(f.ctx)))
+		extra := len(q) - spare
+		for i := 0; i < len(q) && len(batch) < depth && len(batch) <= extra; {
 			if !q[i].retrySolo && q[i].key.group == f.key.group && q[i].ctx.Err() == nil {
 				batch = append(batch, q[i])
 				q = slices.Delete(q, i, i+1)
