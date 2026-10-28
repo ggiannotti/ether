@@ -167,6 +167,9 @@ func (s *Service) verifiedKeys(ctx context.Context) []core.RatingKey {
 			out = append(out, k)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		s.log.Debug("availability verified keys not fully loaded", "err", err)
+	}
 	return out
 }
 func (s *Service) Prioritize(ctx context.Context, items []core.Title) []core.Title {

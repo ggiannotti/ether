@@ -192,6 +192,10 @@ func ExportLogical(ctx context.Context, db *sql.DB, w io.Writer) error {
 		}
 		h.Migrations[c] = v
 	}
+	if err := mrows.Err(); err != nil {
+		mrows.Close()
+		return err
+	}
 	mrows.Close()
 	if err := enc.Encode(h); err != nil {
 		return err

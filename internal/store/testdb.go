@@ -132,6 +132,9 @@ func sweepTestSchemas(ctx context.Context, cfg *pgx.ConnConfig) {
 			stale = append(stale, name)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		slog.Default().Warn("sweep test schemas", "err", err)
+	}
 	rows.Close()
 	for _, name := range stale {
 		_, _ = conn.Exec(ctx, `SET lock_timeout = '2s'; DROP SCHEMA IF EXISTS `+pgx.Identifier{name}.Sanitize()+` CASCADE`)

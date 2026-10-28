@@ -156,26 +156,20 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 	}
 	args := keyArgs(items)
 	ph := placeholders(len(items))
-	// genres
-	if err := c.scanPairs(ctx, `SELECT key,genre FROM catalog_genres WHERE key IN (`+ph+`) ORDER BY genre`, args, func(i int, v string) {
-		items[i].Genres = append(items[i].Genres, v)
-	}, idx); err != nil {
-		return err
-	}
-	if err := c.scanPairs(ctx, `SELECT key,keyword FROM catalog_keywords WHERE key IN (`+ph+`) ORDER BY keyword`, args, func(i int, v string) {
-		items[i].Keywords = append(items[i].Keywords, v)
-	}, idx); err != nil {
-		return err
-	}
-	if err := c.scanPairs(ctx, `SELECT key,studio FROM catalog_studios WHERE key IN (`+ph+`) ORDER BY studio`, args, func(i int, v string) {
-		items[i].Studios = append(items[i].Studios, v)
-	}, idx); err != nil {
-		return err
-	}
-	if err := c.scanPairs(ctx, `SELECT key,country FROM catalog_countries WHERE key IN (`+ph+`) ORDER BY country`, args, func(i int, v string) {
-		items[i].Countries = append(items[i].Countries, v)
-	}, idx); err != nil {
-		return err
+	for _, pair := range []struct {
+		table, col string
+		set        func(t *core.Title, v string)
+	}{
+		{"catalog_genres", "genre", func(t *core.Title, v string) { t.Genres = append(t.Genres, v) }},
+		{"catalog_keywords", "keyword", func(t *core.Title, v string) { t.Keywords = append(t.Keywords, v) }},
+		{"catalog_studios", "studio", func(t *core.Title, v string) { t.Studios = append(t.Studios, v) }},
+		{"catalog_countries", "country", func(t *core.Title, v string) { t.Countries = append(t.Countries, v) }},
+	} {
+		if err := c.scanPairs(ctx, `SELECT key,`+pair.col+` FROM `+pair.table+` WHERE key IN (`+ph+`) ORDER BY `+pair.col, args, func(i int, v string) {
+			pair.set(&items[i], v)
+		}, idx); err != nil {
+			return err
+		}
 	}
 	rows, err := c.db.QueryContext(ctx, `SELECT key,person_tmdb,name,role,kind,thumb FROM catalog_credits WHERE key IN (`+ph+`) ORDER BY kind,ord`, args...)
 	if err != nil {

@@ -878,7 +878,9 @@ func (c *Cache) loadReleaseDir(dir, rel string, all []*entry) []*entry {
 	}
 	r := &release{id: id, dir: dir, segs: make(map[int]*entry), metaOK: true}
 	if b, err := os.ReadFile(filepath.Join(dir, "experience.json")); err == nil {
-		_ = json.Unmarshal(b, &r.experience)
+		if err := json.Unmarshal(b, &r.experience); err != nil {
+			c.logger.Debug("load release experience", "path", dir, "err", err)
+		}
 	}
 	for _, de := range des {
 		name := de.Name()

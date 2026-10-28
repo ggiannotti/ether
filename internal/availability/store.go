@@ -148,16 +148,6 @@ func (s *Service) feedState(ctx context.Context, f core.ReleaseFeed) (string, in
 	}
 	return anchor, checked, gap != 0, err
 }
-func (s *Service) noteFeed(ctx context.Context, f core.ReleaseFeed, anchor string, gap bool, message string, count int, success bool) error {
-	synced := int64(0)
-	if success {
-		synced = s.now().Unix()
-	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO availability_feeds(source_id,generation,anchor,checked_at,synced_at,gap,message,discovered) VALUES(?,?,?,?,?,?,?,?)
- ON CONFLICT(source_id) DO UPDATE SET generation=excluded.generation,anchor=excluded.anchor,checked_at=excluded.checked_at,
- synced_at=CASE WHEN excluded.synced_at>0 THEN excluded.synced_at ELSE availability_feeds.synced_at END,gap=excluded.gap,message=excluded.message,discovered=availability_feeds.discovered+excluded.discovered`, f.ID, f.Generation, anchor, s.now().Unix(), synced, boolInt(gap), message, count)
-	return err
-}
 func boolInt(b bool) int {
 	if b {
 		return 1

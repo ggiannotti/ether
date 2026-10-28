@@ -145,6 +145,9 @@ func (s *Service) attachRetained(ctx context.Context, titles map[core.RatingKey]
 				work = append(work, p)
 			}
 		}
+		if err := rows.Err(); err != nil {
+			s.log.Debug("availability retained releases not fully loaded", "err", err)
+		}
 		rows.Close()
 	}
 	policy := s.policy()
@@ -177,7 +180,9 @@ func (s *Service) attachRetained(ctx context.Context, titles map[core.RatingKey]
 				continue
 			}
 			// Same-generation observations preserve invalidation and their original date.
-			_, _ = s.db.ExecContext(ctx, `INSERT INTO availability_releases(id,rating_key,source_id,generation,payload,title,name,protocol,first_seen,last_seen,priority,policy) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id,rating_key,source_id) DO UPDATE SET generation=excluded.generation,payload=excluded.payload,first_seen=excluded.first_seen,last_seen=excluded.last_seen,state='observed',verified_at=0,first_verified=0,next_check=0,revision=availability_releases.revision+1 WHERE availability_releases.generation<>excluded.generation`, r.ID, t.Key, f.ID, f.Generation, p.raw, t.Title, r.Name, r.Protocol, p.seen, p.seen, t.Popularity, policy)
+			if _, err := s.db.ExecContext(ctx, `INSERT INTO availability_releases(id,rating_key,source_id,generation,payload,title,name,protocol,first_seen,last_seen,priority,policy) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id,rating_key,source_id) DO UPDATE SET generation=excluded.generation,payload=excluded.payload,first_seen=excluded.first_seen,last_seen=excluded.last_seen,state='observed',verified_at=0,first_verified=0,next_check=0,revision=availability_releases.revision+1 WHERE availability_releases.generation<>excluded.generation`, r.ID, t.Key, f.ID, f.Generation, p.raw, t.Title, r.Name, r.Protocol, p.seen, p.seen, t.Popularity, policy); err != nil {
+				s.log.Debug("availability observation could not be saved", "err", err)
+			}
 		}
 	}
 }

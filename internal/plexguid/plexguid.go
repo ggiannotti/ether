@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -232,6 +233,9 @@ func (s *Service) CachedMany(ctx context.Context, keys []core.RatingKey) map[cor
 			if err := rows.Scan(&rk, &guid); err == nil && guid != "" {
 				out[core.RatingKey(rk)] = guid
 			}
+		}
+		if err := rows.Err(); err != nil {
+			slog.Default().Warn("plexguid: cached mappings not fully loaded", "err", err)
 		}
 		_ = rows.Close()
 	}

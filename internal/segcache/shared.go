@@ -338,6 +338,7 @@ func (s *sharedCache) pins() map[string][]string {
 			out[id] = append(out[id], reason)
 		}
 	}
+	s.log(rows.Err())
 	return out
 }
 func (s *sharedCache) usage() (int64, int64) {
@@ -395,6 +396,7 @@ func (s *sharedCache) releases() []ReleaseUsage {
 		}
 		out = append(out, r)
 	}
+	s.log(rows.Err())
 	rows.Close()
 	s.log(err)
 	pins := s.pins()
@@ -538,6 +540,7 @@ func (s *sharedCache) heartbeat() {
 			files = append(files, f)
 		}
 	}
+	s.log(rows.Err())
 	rows.Close()
 	for _, f := range files {
 		s.unlink(f)
@@ -671,5 +674,6 @@ func (c *Cache) ReleaseSizes() map[string]int64 {
 			out[id] = n
 		}
 	}
+	c.shared.log(rows.Err())
 	return out
 }

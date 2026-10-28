@@ -89,7 +89,9 @@ func (c *Catalog) refreshTrend(ctx context.Context, name string, typ core.MediaT
 		if err != nil {
 			// Keep the entire last successful chart, not a partial page or an empty outage.
 			if parent.Err() == nil {
-				_, _ = c.db.ExecContext(parent, `INSERT INTO catalog_trends(name,media_type,attempted_at,failed) VALUES(?,?,?,1) ON CONFLICT(name,media_type) DO UPDATE SET attempted_at=excluded.attempted_at,failed=1`, name, string(typ), c.now().Unix())
+				if _, merr := c.db.ExecContext(parent, `INSERT INTO catalog_trends(name,media_type,attempted_at,failed) VALUES(?,?,?,1) ON CONFLICT(name,media_type) DO UPDATE SET attempted_at=excluded.attempted_at,failed=1`, name, string(typ), c.now().Unix()); merr != nil {
+					c.log.Debug("catalog: mark trend refresh failed", "name", name, "type", typ, "err", merr)
+				}
 			}
 			return old, err
 		}

@@ -351,7 +351,9 @@ func (s *Service) verify(parent context.Context) error {
 		}
 		t, e := s.d.Catalog.CachedTitle(parent, q.key)
 		if e != nil || t == nil || !t.IsReleased(s.now()) {
-			_, _ = s.db.ExecContext(parent, `UPDATE availability_releases SET next_check=?,policy=? WHERE id=? AND rating_key=? AND source_id=?`, now+3600, policy, q.id, q.key, q.source)
+			if _, err := s.db.ExecContext(parent, `UPDATE availability_releases SET next_check=?,policy=? WHERE id=? AND rating_key=? AND source_id=?`, now+3600, policy, q.id, q.key, q.source); err != nil {
+				s.log.Debug("availability next check could not be saved", "error", err)
+			}
 			continue
 		}
 		r, reason, e := s.d.Validator.FeedCandidate(parent, t, r)
@@ -457,6 +459,9 @@ func (s *Service) Candidates(ctx context.Context, t *core.Title) []core.Release 
 		if r, e := s.decode(raw); e == nil {
 			out = append(out, r)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		s.log.Debug("availability candidates not fully loaded", "err", err)
 	}
 	return out
 }

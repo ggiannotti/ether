@@ -44,29 +44,21 @@ type Stats struct {
 func (c *Catalog) Stats(ctx context.Context) (Stats, error) {
 	var s Stats
 	s.Trending = c.TrendStatus(ctx)
-	count := func(q string, dst *int, args ...any) error {
-		return c.db.QueryRowContext(ctx, q, args...).Scan(dst)
-	}
-	if err := count(`SELECT COUNT(*) FROM catalog_titles WHERE type='movie'`, &s.Movies); err != nil {
-		return s, err
-	}
-	if err := count(`SELECT COUNT(*) FROM catalog_titles WHERE type='show'`, &s.Shows); err != nil {
-		return s, err
-	}
-	if err := count(`SELECT COUNT(*) FROM catalog_titles WHERE type='season'`, &s.Seasons); err != nil {
-		return s, err
-	}
-	if err := count(`SELECT COUNT(*) FROM catalog_titles WHERE type='episode'`, &s.Episodes); err != nil {
-		return s, err
-	}
-	if err := count(`SELECT COUNT(*) FROM catalog_titles WHERE type='movie' AND browsable=1`, &s.BrowsableMovies); err != nil {
-		return s, err
-	}
-	if err := count(`SELECT COUNT(*) FROM catalog_titles WHERE type='show' AND browsable=1`, &s.BrowsableShows); err != nil {
-		return s, err
-	}
-	if err := count(`SELECT COUNT(*) FROM catalog_collections`, &s.Collections); err != nil {
-		return s, err
+	for _, count := range []struct {
+		query string
+		dst   *int
+	}{
+		{`SELECT COUNT(*) FROM catalog_titles WHERE type='movie'`, &s.Movies},
+		{`SELECT COUNT(*) FROM catalog_titles WHERE type='show'`, &s.Shows},
+		{`SELECT COUNT(*) FROM catalog_titles WHERE type='season'`, &s.Seasons},
+		{`SELECT COUNT(*) FROM catalog_titles WHERE type='episode'`, &s.Episodes},
+		{`SELECT COUNT(*) FROM catalog_titles WHERE type='movie' AND browsable=1`, &s.BrowsableMovies},
+		{`SELECT COUNT(*) FROM catalog_titles WHERE type='show' AND browsable=1`, &s.BrowsableShows},
+		{`SELECT COUNT(*) FROM catalog_collections`, &s.Collections},
+	} {
+		if err := c.db.QueryRowContext(ctx, count.query).Scan(count.dst); err != nil {
+			return s, err
+		}
 	}
 	if v := c.getMeta(ctx, "last_sync"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
@@ -534,12 +526,19 @@ func (c *Catalog) ensurePersonCredits(ctx context.Context, personID int64) {
 	}
 	if len(links) > 0 {
 		tx, err := c.db.BeginTx(ctx, nil)
-		if err == nil {
+		if err != nil {
+			c.log.Debug("catalog: begin person credits", "person", personID, "err", err)
+		} else {
+			defer tx.Rollback() // after Commit this returns ErrTxDone, ignorable
 			for _, l := range links {
-				_, _ = tx.ExecContext(ctx, `INSERT INTO catalog_credits(key,person_tmdb,name,role,kind,ord,thumb) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
-					int64(l.key), personID, personName, l.role, l.kind, l.ord, personThumb)
+				if _, err := tx.ExecContext(ctx, `INSERT INTO catalog_credits(key,person_tmdb,name,role,kind,ord,thumb) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+					int64(l.key), personID, personName, l.role, l.kind, l.ord, personThumb); err != nil {
+					c.log.Debug("catalog: save person credit", "person", personID, "err", err)
+				}
 			}
-			if tx.Commit() == nil {
+			if err := tx.Commit(); err != nil {
+				c.log.Debug("catalog: commit person credits", "person", personID, "err", err)
+			} else {
 				c.writeGen.Add(1)
 			}
 		}

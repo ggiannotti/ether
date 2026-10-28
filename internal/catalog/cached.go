@@ -79,6 +79,10 @@ func (c *Catalog) ShowTrajectories(ctx context.Context, shows []core.RatingKey) 
 		statusByShow[core.RatingKey(k)] = st
 		showRating[core.RatingKey(k)] = r
 	}
+	if err := srows.Err(); err != nil {
+		srows.Close()
+		return nil, err
+	}
 	srows.Close()
 
 	type sPoint struct {
@@ -103,6 +107,10 @@ func (c *Catalog) ShowTrajectories(ctx context.Context, shows []core.RatingKey) 
 		}
 		byShow[core.RatingKey(sk)] = append(byShow[core.RatingKey(sk)], sPoint{season: sea, rating: r})
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
 	rows.Close()
 
 	// Fallback/augmentation from mirrored episode ratings when season ratings are 0.
@@ -120,6 +128,10 @@ func (c *Catalog) ShowTrajectories(ctx context.Context, shows []core.RatingKey) 
 			if erows.Scan(&sk, &sea, &r) == nil {
 				epByShow[core.RatingKey(sk)] = append(epByShow[core.RatingKey(sk)], sPoint{season: sea, rating: r})
 			}
+		}
+		if err := erows.Err(); err != nil {
+			erows.Close()
+			return nil, err
 		}
 		erows.Close()
 		for k, pts := range epByShow {

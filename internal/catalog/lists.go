@@ -439,9 +439,11 @@ func (c *Catalog) Collection(ctx context.Context, tmdbCollection int64) (string,
 	if c.client != nil {
 		d, err := c.client.CollectionDetails(ctx, tmdbCollection)
 		if err == nil {
-			_, _ = c.db.ExecContext(ctx, `INSERT INTO catalog_collections(tmdb_id,name,summary,poster,backdrop,fetched_at) VALUES(?,?,?,?,?,?)
+			if _, err := c.db.ExecContext(ctx, `INSERT INTO catalog_collections(tmdb_id,name,summary,poster,backdrop,fetched_at) VALUES(?,?,?,?,?,?)
 				ON CONFLICT(tmdb_id) DO UPDATE SET name=excluded.name,summary=excluded.summary,poster=excluded.poster,backdrop=excluded.backdrop,fetched_at=excluded.fetched_at`,
-				d.ID, d.Name, d.Overview, d.PosterPath, d.BackdropPath, c.now().Unix())
+				d.ID, d.Name, d.Overview, d.PosterPath, d.BackdropPath, c.now().Unix()); err != nil {
+				c.log.Debug("catalog: cache collection", "tmdb", d.ID, "err", err)
+			}
 			var items []core.Title
 			for _, m := range d.Parts {
 				t := c.movieToTitle(ctx, m)

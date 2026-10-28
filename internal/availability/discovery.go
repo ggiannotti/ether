@@ -77,6 +77,9 @@ func (s *Service) filterReleaseDiscovery(ctx context.Context, items []core.Title
 				observations = append(observations, o)
 			}
 		}
+		if err := rows.Err(); err != nil {
+			s.log.Debug("availability observations not fully loaded", "err", err)
+		}
 		rows.Close()
 	}
 	// Close the cursor before policy checks, which may read the same database.
