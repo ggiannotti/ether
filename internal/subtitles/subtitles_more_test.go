@@ -262,7 +262,7 @@ func TestLegacyEncodingsAndZip(t *testing.T) {
 	}
 
 	raw := zbuf.Bytes()
-	sub, err := unzipSubtitle(raw)
+	sub, err := unzipSubtitle(raw, "ja")
 	if err != nil {
 		t.Fatal(err)
 	}
