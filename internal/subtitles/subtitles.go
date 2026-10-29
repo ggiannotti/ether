@@ -208,8 +208,10 @@ type Candidate struct {
 	HearingImp    bool
 	AITranslated  bool
 	HashMatch     bool
-	// Forced marks a foreign-parts-only track (OpenSubtitles'
-	// foreign_parts_only), which Plex calls forced.
+	// Forced marks a real forced track: OpenSubtitles'
+	// foreign_parts_only and NOT hearing_impaired (a HI
+	// foreign-parts track is SDH, not forced; HearingImp
+	// carries that signal separately).
 	Forced bool
 	Score  float64 // filled by Rank
 }
@@ -353,7 +355,7 @@ func (s *Service) SearchWithHash(ctx context.Context, title *core.Title, lang, r
 			HashMatch: a.HashMatch, FileID: a.Files[0].FileID, FileName: a.Files[0].FileName, Language: a.Language,
 			Release: a.Release, DownloadCount: a.DownloadCount, Ratings: a.Ratings,
 			Uploader: a.Uploader.Name, UploaderRank: a.Uploader.Rank,
-			HearingImp: a.HearingImp, AITranslated: a.AITranslated, Forced: a.ForeignOnly,
+			HearingImp: a.HearingImp, AITranslated: a.AITranslated, Forced: a.ForeignOnly && !a.HearingImp,
 		})
 	}
 	Rank(out, releaseName)
@@ -695,12 +697,86 @@ func MissingLanguages(user *core.User, embedded []core.StreamInfo) []string {
 	return out
 }
 
+// Preferences is the viewer's subtitle mode/style (trackprefs vocabulary)
+// for automatic fetching. Empty means no preference: best-ranked wins.
+type Preferences struct {
+	Mode  string // off, forced-only, foreign-only, always
+	Style string // normal, sdh, forced
+}
+
+func firstPrefs(prefs []Preferences) Preferences {
+	if len(prefs) > 0 {
+		return prefs[0]
+	}
+	return Preferences{}
+}
+
+// prefSig identifies a preference set for the negative cache, so a
+// "nothing found" for one mode/style never blocks another.
+func prefSig(p Preferences) string { return p.Mode + "/" + p.Style }
+
+// selectionSatisfies reports whether a persisted selection may serve as
+// the fast path for p: forced-only and style forced need a real forced
+// track, style sdh needs an SDH track. Unconstrained prefs accept any.
+func selectionSatisfies(sel selection, p Preferences) bool {
+	if p.Mode == "forced-only" && !sel.Forced {
+		return false
+	}
+	switch p.Style {
+	case "sdh":
+		return sel.SDH
+	case "forced":
+		return sel.Forced
+	}
+	return true
+}
+
+// candidatesForFetch applies Preferences to ranked candidates: forced-only
+// requires a real forced track (never a full or HI track), style sdh/forced
+// prefers matching tracks via a stable partition that keeps Rank order
+// inside each group. The input slice is not mutated.
+func candidatesForFetch(cands []Candidate, p Preferences) []Candidate {
+	if p.Mode == "forced-only" {
+		out := make([]Candidate, 0, len(cands))
+		for _, c := range cands {
+			if c.Forced {
+				out = append(out, c)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		cands = out
+	}
+	var match func(Candidate) bool
+	switch p.Style {
+	case "sdh":
+		match = func(c Candidate) bool { return c.HearingImp }
+	case "forced":
+		match = func(c Candidate) bool { return c.Forced }
+	default:
+		return cands
+	}
+	out := make([]Candidate, 0, len(cands))
+	for _, c := range cands {
+		if match(c) {
+			out = append(out, c)
+		}
+	}
+	for _, c := range cands {
+		if !match(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // Sidecars returns external subtitle streams for the user's preferred
 // languages missing from the embedded tracks. It returns (nil, nil) when
 // the service is disabled or nothing is missing; per-language failures are
 // logged and skipped, never failing playback.
-func (s *Service) Sidecars(ctx context.Context, title *core.Title, user *core.User, embedded []core.StreamInfo) ([]core.StreamInfo, error) {
-	return s.SidecarsForRelease(ctx, title, user, embedded, "")
+func (s *Service) Sidecars(ctx context.Context, title *core.Title, user *core.User, embedded []core.StreamInfo, prefs ...Preferences) ([]core.StreamInfo, error) {
+	return s.SidecarsForRelease(ctx, title, user, embedded, "", prefs...)
 }
 
 // selection is the persisted choice for one title+language+release, so
@@ -711,8 +787,14 @@ type selection struct {
 	Language string    `json:"language"`
 	Release  string    `json:"release"`
 	At       time.Time `json:"at"`
-	// Forced is set for a viewer-picked foreign-parts-only track.
+	// Forced is set for a real forced track (foreign-parts-only, not HI).
 	Forced bool `json:"forced,omitempty"`
+	// SDH marks a hearing-impaired track; it is surfaced in the sidecar
+	// title so trackprefs' sdh() detection can match it. Selections
+	// persisted before this field existed load with SDH=false and keep
+	// serving as non-SDH until re-downloaded — SDH is never invented
+	// from a release name.
+	SDH bool `json:"sdh,omitempty"`
 }
 
 func releaseSig(release string) string {
@@ -785,8 +867,8 @@ func writeFileAtomic(path string, data []byte) error {
 	return nil
 }
 
-func negKey(title *core.Title, lang, release string) string {
-	return fmt.Sprintf("%d|%s|%s", int64(title.Key), lang, releaseSig(release))
+func negKey(title *core.Title, lang, release string, p Preferences) string {
+	return fmt.Sprintf("%d|%s|%s|%s", int64(title.Key), lang, releaseSig(release), prefSig(p))
 }
 
 func sidecarTitle(lang, release string) string {
@@ -805,12 +887,13 @@ func sidecarTitle(lang, release string) string {
 // three candidates are tried in order, and the winner is cached and
 // remembered. "Nothing found" is remembered for NegativeTTL. A quota error
 // stops downloads for the rest of the call.
-func (s *Service) SidecarsForRelease(ctx context.Context, title *core.Title, user *core.User, embedded []core.StreamInfo, releaseName string) ([]core.StreamInfo, error) {
-	return s.SidecarsWithHash(ctx, title, user, embedded, releaseName, "")
+func (s *Service) SidecarsForRelease(ctx context.Context, title *core.Title, user *core.User, embedded []core.StreamInfo, releaseName string, prefs ...Preferences) ([]core.StreamInfo, error) {
+	return s.SidecarsWithHash(ctx, title, user, embedded, releaseName, "", prefs...)
 }
 
 // SidecarsWithHash uses an already-computed cached-source hash for exact release matching.
-func (s *Service) SidecarsWithHash(ctx context.Context, title *core.Title, user *core.User, embedded []core.StreamInfo, releaseName, movieHash string) ([]core.StreamInfo, error) {
+func (s *Service) SidecarsWithHash(ctx context.Context, title *core.Title, user *core.User, embedded []core.StreamInfo, releaseName, movieHash string, prefs ...Preferences) ([]core.StreamInfo, error) {
+	pref := firstPrefs(prefs)
 	cacheRelease := releaseName
 	if movieHash != "" {
 		cacheRelease += " hash-" + movieHash
@@ -850,14 +933,17 @@ func (s *Service) SidecarsWithHash(ctx context.Context, title *core.Title, user 
 			delete(manual, lang)
 			continue
 		}
-		if sel, ok := s.loadSelection(title, lang, cacheRelease); ok {
+		// Fast path only when the persisted selection satisfies the
+		// requested preferences; a cached full track must not answer a
+		// forced-only (or sdh/forced-style) request — search fresh.
+		if sel, ok := s.loadSelection(title, lang, cacheRelease); ok && selectionSatisfies(sel, pref) {
 			add(lang, sel)
 			continue
 		}
 		if quotaHit {
 			continue
 		}
-		nk := negKey(title, lang, cacheRelease)
+		nk := negKey(title, lang, cacheRelease, pref)
 		s.mu.Lock()
 		negAt, neg := s.negative[nk]
 		s.mu.Unlock()
@@ -868,6 +954,9 @@ func (s *Service) SidecarsWithHash(ctx context.Context, title *core.Title, user 
 		if err != nil {
 			s.log.Debug("subtitle search failed", "lang", lang, "key", title.Key, "err", err)
 			continue
+		}
+		if pref.Mode != "" || pref.Style != "" {
+			cands = candidatesForFetch(cands, pref)
 		}
 		found := false
 		// Try the best few candidates; a dead link should not lose the language.
@@ -888,8 +977,9 @@ func (s *Service) SidecarsWithHash(ctx context.Context, title *core.Title, user 
 			if release == "" {
 				release = c.FileName
 			}
-			s.saveSelection(title, lang, cacheRelease, selection{ID: id, FileID: c.FileID, Language: lang, Release: release, At: s.now().UTC()})
-			add(lang, selection{ID: id, Release: release})
+			sel := selection{ID: id, FileID: c.FileID, Language: lang, Release: release, At: s.now().UTC(), Forced: c.Forced, SDH: c.HearingImp}
+			s.saveSelection(title, lang, cacheRelease, sel)
+			add(lang, sel)
 			found = true
 			break
 		}

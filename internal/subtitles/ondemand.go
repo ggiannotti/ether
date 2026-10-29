@@ -54,9 +54,17 @@ type offer struct {
 }
 
 func sidecarStream(index int, lang string, sel selection) core.StreamInfo {
+	title := sidecarTitle(lang, sel.Release)
+	if sel.SDH {
+		// trackprefs detects SDH from the track title; without this marker
+		// an SDH sidecar could never match an sdh style/memory choice.
+		// The marker is delimited (" (SDH)") so it cannot be confused with
+		// an "SDH" token inside a release name.
+		title += " (SDH)"
+	}
 	return core.StreamInfo{
 		Index: index, Type: "subtitle", Codec: "srt", Language: lang, Forced: sel.Forced,
-		Title: sidecarTitle(lang, sel.Release), External: true, ExternalURL: URLPrefix + sel.ID,
+		Title: title, External: true, ExternalURL: URLPrefix + sel.ID,
 	}
 }
 
@@ -234,7 +242,7 @@ func (s *Service) DownloadOnDemand(ctx context.Context, title *core.Title, fileI
 	if release == "" {
 		release = o.cand.FileName
 	}
-	sel := selection{ID: id, FileID: fileID, Language: o.lang, Release: release, At: s.now().UTC(), Forced: o.cand.Forced}
+	sel := selection{ID: id, FileID: fileID, Language: o.lang, Release: release, At: s.now().UTC(), Forced: o.cand.Forced, SDH: o.cand.HearingImp}
 	p := s.manualPath(title.Key, o.lang)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return core.StreamInfo{}, err
@@ -289,7 +297,7 @@ func (s *Service) OpenFormatAt(id, format string, offset time.Duration) (io.Read
 // Downloads count against the OpenSubtitles daily quota, so prefetches
 // are budgeted: one per title at a time, two server-wide, twenty an hour,
 // none while the quota is exhausted. False means nothing was started.
-func (s *Service) PrefetchSidecars(title *core.Title, user *core.User) bool {
+func (s *Service) PrefetchSidecars(title *core.Title, user *core.User, prefs ...Preferences) bool {
 	if title == nil || user == nil || !s.Enabled() {
 		return false
 	}
@@ -353,7 +361,7 @@ func (s *Service) PrefetchSidecars(title *core.Title, user *core.User) bool {
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), prefetchTimeout)
 		defer cancel()
-		if _, err := s.SidecarsForRelease(ctx, &t, &u, nil, ""); err != nil {
+		if _, err := s.SidecarsForRelease(ctx, &t, &u, nil, "", prefs...); err != nil {
 			s.log.Debug("subtitle prefetch", "key", t.Key, "err", err)
 		}
 	}()

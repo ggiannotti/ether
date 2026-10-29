@@ -10,6 +10,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/markers"
 	"github.com/braedonsaunders/ether/internal/plex"
+	"github.com/braedonsaunders/ether/internal/subtitles"
 )
 
 // subtitleUser is u with the subtitle languages of the viewer's stream
@@ -29,8 +30,20 @@ func (a *App) subtitleUser(ctx context.Context, u *core.User) *core.User {
 	return &copy
 }
 
+// subtitlePrefs is the viewer's subtitle mode/style for automatic fetching.
+func (a *App) subtitlePrefs(ctx context.Context, u *core.User) subtitles.Preferences {
+	if u == nil || a.trackprefs == nil {
+		return subtitles.Preferences{}
+	}
+	rules, err := a.trackprefs.GetRules(ctx, u.ID)
+	if err != nil {
+		return subtitles.Preferences{}
+	}
+	return subtitles.Preferences{Mode: rules.SubtitleMode, Style: rules.SubtitleStyle}
+}
+
 func (a *App) enrichSubtitles(ctx context.Context, t *core.Title, u *core.User, res *core.Resolution, src core.MediaSource, info *core.MediaInfo) {
-	a.subtitles.Enrich(ctx, t, a.subtitleUser(ctx, u), res, src, info)
+	a.subtitles.Enrich(ctx, t, a.subtitleUser(ctx, u), res, src, info, a.subtitlePrefs(ctx, u))
 }
 
 // plexSubtitles is plex.Deps.Subtitles: the OpenSubtitles service with the
@@ -58,7 +71,7 @@ func (p plexSubtitles) CachedSidecars(ctx context.Context, t *core.Title, u *cor
 }
 
 func (p plexSubtitles) PrefetchSidecars(ctx context.Context, t *core.Title, u *core.User) bool {
-	return p.a.subtitles.PrefetchSidecars(t, p.a.subtitleUser(ctx, u))
+	return p.a.subtitles.PrefetchSidecars(t, p.a.subtitleUser(ctx, u), p.a.subtitlePrefs(ctx, u))
 }
 
 func (p plexSubtitles) SearchSubtitles(ctx context.Context, t *core.Title, _ *core.User, lang, release string) ([]plex.SubtitleOffer, error) {
