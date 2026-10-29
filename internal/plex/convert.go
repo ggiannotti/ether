@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/langtag"
 	"github.com/braedonsaunders/ether/internal/plex/model"
 )
 
@@ -730,10 +731,20 @@ func extendedTitle(st core.StreamInfo, display, codec string) string {
 // first. Multi-language releases often flag a dub as default.
 func pickAudio(info core.MediaInfo, langs []string) int {
 	for _, lang := range langs {
+		// Within one wanted language the best tier wins (exact before
+		// generic-want×regional before regional-want×generic); preference
+		// order across languages still dominates.
+		best, bestTier := -1, 0
 		for i, st := range info.Streams {
-			if st.Type == "audio" && sameLanguage(st.Language, lang) {
-				return i
+			if st.Type != "audio" {
+				continue
 			}
+			if tier := langtag.MatchTier(lang, st.Language); tier > bestTier {
+				best, bestTier = i, tier
+			}
+		}
+		if best >= 0 {
+			return best
 		}
 	}
 	first := -1
@@ -983,52 +994,41 @@ var languages = map[string][3]string{
 	"ca": {"Catalan", "cat", "ca"}, "eu": {"Basque", "baq", "eu"}, "gl": {"Galician", "glg", "gl"},
 }
 
-var lang3to1 = func() map[string]string {
-	m := map[string]string{}
-	for k, v := range languages {
-		m[v[1]] = k
+// primaryLang is the display/code lookup key for a language: the
+// canonical primary subtag from langtag (region and script dropped).
+func primaryLang(code string) string {
+	if t, ok := langtag.ParseBCP47(code); ok {
+		return t.Primary
 	}
-	// 639-2/T variants
-	for t, b := range map[string]string{"fra": "fr", "deu": "de", "nld": "nl", "ces": "cs", "ell": "el", "zho": "zh", "ron": "ro", "slk": "sk", "fas": "fa", "msa": "ms", "isl": "is", "eus": "eu"} {
-		m[t] = b
-	}
-	return m
-}()
-
-func normLang(code string) string {
-	c := strings.ToLower(strings.TrimSpace(code))
-	if i := strings.IndexAny(c, "-_"); i > 0 {
-		c = c[:i]
-	}
-	if len(c) == 3 {
-		if two, ok := lang3to1[c]; ok {
-			return two
-		}
-	}
-	return c
+	return strings.ToLower(strings.TrimSpace(code))
 }
 
-func sameLanguage(a, b string) bool { return a != "" && normLang(a) == normLang(b) }
+// sameLanguage is the symmetric view of langtag.MatchTier: true when
+// the tier is > 0 — exact, or the same primary with at least one
+// generic side (pt × pt-br true; pt-br × pt-pt false).
+func sameLanguage(a, b string) bool {
+	return a != "" && b != "" && langtag.MatchTier(a, b) > 0
+}
 
 func languageName(code string) string {
 	if code == "" {
 		return ""
 	}
-	if l, ok := languages[normLang(code)]; ok {
+	if l, ok := languages[primaryLang(code)]; ok {
 		return l[0]
 	}
 	return code
 }
 
 func languageCode3(code string) string {
-	if l, ok := languages[normLang(code)]; ok {
+	if l, ok := languages[primaryLang(code)]; ok {
 		return l[1]
 	}
 	return strings.ToLower(code)
 }
 
 func languageTag(code string) string {
-	if l, ok := languages[normLang(code)]; ok {
+	if l, ok := languages[primaryLang(code)]; ok {
 		return l[2]
 	}
 	return strings.ToLower(code)

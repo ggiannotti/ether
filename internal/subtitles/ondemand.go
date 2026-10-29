@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/langtag"
 )
 
 // manualSig is the index-file signature of a viewer-picked track. Release
@@ -185,7 +186,7 @@ func (s *Service) SearchOnDemand(ctx context.Context, title *core.Title, lang, r
 	if title == nil || !s.Enabled() {
 		return nil, nil
 	}
-	lang = normLang(lang)
+	lang = langtag.Normalize(lang)
 	if lang == "" {
 		return nil, fmt.Errorf("subtitle search needs a language")
 	}

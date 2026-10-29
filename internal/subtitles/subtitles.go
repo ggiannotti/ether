@@ -37,6 +37,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/flight"
+	"github.com/braedonsaunders/ether/internal/langtag"
 	"github.com/braedonsaunders/ether/internal/retryafter"
 )
 
@@ -130,7 +131,7 @@ func New(opts Options) *Service {
 		alignLangs = alignLangs[:0]
 		seenLang := map[string]bool{}
 		for _, l := range opts.AlignLanguages {
-			if n := normLang(l); n != "" && !seenLang[n] && len(alignLangs) < 3 {
+			if n := langtag.Normalize(l); n != "" && !seenLang[n] && len(alignLangs) < 3 {
 				seenLang[n] = true
 				alignLangs = append(alignLangs, n)
 			}
@@ -345,7 +346,7 @@ func (s *Service) SearchWithHash(ctx context.Context, title *core.Title, lang, r
 		if len(a.Files) == 0 {
 			continue
 		}
-		if lang != "" && a.Language != "" && normLang(a.Language) != normLang(lang) {
+		if lang != "" && a.Language != "" && langtag.MatchTier(lang, a.Language) == 0 {
 			continue // the API matched a different language variant
 		}
 		out = append(out, Candidate{
@@ -644,71 +645,10 @@ func (s *Service) fetchAndCache(ctx context.Context, id string, c Candidate) (st
 	})
 }
 
-// normLang folds "en"/"eng"/"EN"/"en-US" to a comparable 2-letter code
-// (keeping pt-br distinct, as OpenSubtitles does).
-func normLang(l string) string {
-	l = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(l)), "_", "-")
-	switch l {
-	case "pt-br", "zh-tw", "pob":
-		if l == "pob" {
-			return "pt-br"
-		}
-		return l
-	}
-	if i := strings.IndexAny(l, "-_"); i > 0 {
-		l = l[:i]
-	}
-	// ISO 639-2 -> 639-1 for common embedded-track codes.
-	switch l {
-	case "eng":
-		return "en"
-	case "spa":
-		return "es"
-	case "fre", "fra":
-		return "fr"
-	case "ger", "deu":
-		return "de"
-	case "ita":
-		return "it"
-	case "por":
-		return "pt"
-	case "dut", "nld":
-		return "nl"
-	case "jpn":
-		return "ja"
-	case "kor":
-		return "ko"
-	case "chi", "zho":
-		return "zh"
-	case "rus":
-		return "ru"
-	case "ara":
-		return "ar"
-	case "hin":
-		return "hi"
-	case "swe":
-		return "sv"
-	case "nor":
-		return "no"
-	case "dan":
-		return "da"
-	case "fin":
-		return "fi"
-	case "pol":
-		return "pl"
-	case "tur":
-		return "tr"
-	}
-	if len(l) > 2 {
-		return l[:2]
-	}
-	return l
-}
-
 // queryLang maps a normalised language to the code OpenSubtitles expects in
 // the languages parameter (it splits Portuguese and Chinese by region).
 func queryLang(l string) string {
-	switch n := normLang(l); n {
+	switch n := langtag.Normalize(l); n {
 	case "pt":
 		return "pt-pt"
 	case "zh":
@@ -724,21 +664,33 @@ func MissingLanguages(user *core.User, embedded []core.StreamInfo) []string {
 	if user == nil {
 		return nil
 	}
-	have := map[string]bool{}
+	var have []string
 	for _, st := range embedded {
 		if st.Type == "subtitle" && st.Language != "" {
-			have[normLang(st.Language)] = true
+			have = append(have, langtag.Normalize(st.Language))
 		}
 	}
 	var out []string
 	seen := map[string]bool{}
 	for _, l := range user.SubtitleLanguages {
-		n := normLang(l)
-		if n == "" || have[n] || seen[n] {
+		n := langtag.Normalize(l)
+		if n == "" || seen[n] {
 			continue
 		}
 		seen[n] = true
-		out = append(out, n)
+		// Directional coverage (langtag.MatchTier): a regional embedded
+		// track satisfies a generic want (tier 2), but a generic embedded
+		// track does not satisfy a regional want (tier 1) — download it.
+		covered := false
+		for _, h := range have {
+			if langtag.MatchTier(n, h) >= 2 {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			out = append(out, n)
+		}
 	}
 	return out
 }

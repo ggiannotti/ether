@@ -19,6 +19,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/langtag"
 )
 
 // osFake is a configurable OpenSubtitles fake.
@@ -308,8 +309,8 @@ func TestConcurrentSidecarsSingleFlight(t *testing.T) {
 
 func TestLanguageHelpers(t *testing.T) {
 	for in, want := range map[string]string{"eng": "en", "EN-us": "en", "pt_BR": "pt-br", "pob": "pt-br", "por": "pt", "zh-TW": "zh-tw", "chi": "zh", "fre": "fr"} {
-		if got := normLang(in); got != want {
-			t.Errorf("normLang(%q)=%q want %q", in, got, want)
+		if got := langtag.Normalize(in); got != want {
+			t.Errorf("langtag.Normalize(%q)=%q want %q", in, got, want)
 		}
 	}
 	if queryLang("por") != "pt-pt" || queryLang("zh") != "zh-cn" || queryLang("pt-BR") != "pt-br" {

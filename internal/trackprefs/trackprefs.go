@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/langtag"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -129,7 +130,7 @@ func (s *Service) Remember(ctx context.Context, user int64, key core.RatingKey, 
 		if track.Type != kind {
 			return errors.New("stream type does not match")
 		}
-		c.Language = lang(track.Language)
+		c.Language = langtag.Normalize(track.Language)
 		c.Forced = track.Forced
 		c.SDH = sdh(*track)
 	}
@@ -157,44 +158,34 @@ func (s *Service) choice(ctx context.Context, user int64, key core.RatingKey, ki
 	err = json.Unmarshal([]byte(raw), &c)
 	return c, err == nil, err
 }
-func lang(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.Split(s, "-")[0]
-	switch s {
-	case "eng":
-		return "en"
-	case "fre", "fra":
-		return "fr"
-	case "ger", "deu":
-		return "de"
-	case "spa":
-		return "es"
-	case "jpn":
-		return "ja"
-	case "ita":
-		return "it"
-	case "por":
-		return "pt"
-	case "chi", "zho":
-		return "zh"
-	case "kor":
-		return "ko"
-	case "rus":
-		return "ru"
-	}
-	return s
-}
 func sdh(t core.StreamInfo) bool {
 	v := strings.ToLower(t.Title)
 	return strings.Contains(v, "sdh") || strings.Contains(v, "hearing impaired") || strings.Contains(v, "[cc]") || v == "cc"
 }
+
+// rankLanguage scores a track against the wanted languages via
+// langtag.MatchTier. The tier penalties (40/80) exceed every
+// non-language bonus in pick (default 5 + style 10 + forced-style 10),
+// so for the same want a weak tier-1 track can never beat a tier-2 or
+// exact tier-3 track on those bonuses alone.
 func rankLanguage(code string, want []string) int {
+	best := 0
 	for i, v := range want {
-		if lang(code) != "" && lang(code) == lang(v) {
-			return 1000 - i*20
+		score := 1000 - i*20
+		switch langtag.MatchTier(v, code) {
+		case 3:
+		case 2:
+			score -= 40
+		case 1:
+			score -= 80
+		default:
+			continue
+		}
+		if score > best {
+			best = score
 		}
 	}
-	return 0
+	return best
 }
 func pick(streams []core.StreamInfo, kind string, want []string, style string, forcedOnly bool, memory *Choice) int {
 	best, score := -1, -100000
@@ -214,7 +205,7 @@ func pick(streams []core.StreamInfo, kind string, want []string, style string, f
 				n += 10
 			}
 		}
-		if memory != nil && lang(t.Language) == memory.Language && t.Forced == memory.Forced && sdh(t) == memory.SDH {
+		if memory != nil && langtag.Normalize(t.Language) == langtag.Normalize(memory.Language) && t.Forced == memory.Forced && sdh(t) == memory.SDH {
 			n += 10000
 		}
 		if n > score {

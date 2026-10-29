@@ -392,8 +392,13 @@ func TestMatroskaLanguageMatchesLibavformat(t *testing.T) {
 		want  string
 	}{
 		{mkvTrack{language: "eng", hasLanguage: true, bcp47: "en-US"}, "eng"},
-		{mkvTrack{language: "eng", bcp47: "pt-BR"}, "por"},
-		{mkvTrack{language: "eng", bcp47: "x-klingon"}, "x"},
+		// BCP47-only pt-BR keeps its region via langtag ("pt-br", not the
+		// generic legacy "por"): regional preferences depend on it.
+		{mkvTrack{language: "eng", bcp47: "pt-BR"}, "pt-br"},
+		// Script is parsed, not read as region: zh-Hant-TW => zh-tw.
+		{mkvTrack{bcp47: "zh-Hant-TW"}, "zh-tw"},
+		// Primary "x" is not a language: garbage BCP47 keeps the legacy.
+		{mkvTrack{language: "eng", bcp47: "x-klingon"}, "eng"},
 		{mkvTrack{language: "und", hasLanguage: true}, ""},
 	} {
 		c.track.kind, c.track.codecID, c.track.channels, c.track.sampling = 2, "A_AC3", 2, 48000

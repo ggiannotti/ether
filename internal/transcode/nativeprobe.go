@@ -761,11 +761,9 @@ func (t mkvTrack) stream(index int) (core.StreamInfo, bool, error) {
 	// to the same three-letter form.
 	si.Language = normalizeLanguage(t.language)
 	if !t.hasLanguage && t.bcp47 != "" {
-		primary, _, _ := strings.Cut(strings.ToLower(t.bcp47), "-")
-		if three, ok := iso6391to2[primary]; ok {
-			primary = three
+		if norm := normalizeBCP47Language(t.bcp47); norm != "" {
+			si.Language = norm
 		}
-		si.Language = normalizeLanguage(primary)
 	}
 	var err error
 	switch t.kind {

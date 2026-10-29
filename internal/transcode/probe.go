@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/langtag"
 )
 
 // probeAttempt is one ffprobe pass. The first is small so a remote stream
@@ -319,12 +320,37 @@ func tag(tags map[string]string, key string) string {
 	return ""
 }
 
+// normalizeLanguage keeps the form the probes have always reported in
+// StreamInfo.Language (legacy ISO 639-2 where the source carries it),
+// dropping undetermined/unknown and anything langtag rejects as
+// garbage. It is the shared entry point for the ffprobe tag, the
+// Matroska legacy Language element and the MP4 mdhd code.
 func normalizeLanguage(l string) string {
-	l = strings.ToLower(strings.TrimSpace(l))
-	if l == "und" || l == "unknown" {
+	if langtag.Normalize(l) == "" {
 		return ""
 	}
-	return l
+	return strings.ToLower(strings.TrimSpace(l))
+}
+
+// normalizeBCP47Language converts a BCP 47 tag (Matroska
+// LanguageBCP47) to the form stored in StreamInfo.Language via
+// langtag: Portuguese and Chinese keep their region (pt-br, zh-tw —
+// script is parsed, never read as region, so zh-Hant-TW folds to
+// zh-tw), every other language folds to the ISO 639-2 form the probes
+// have always reported. "" means the tag is garbage and the caller
+// keeps its legacy value.
+func normalizeBCP47Language(tag string) string {
+	n := langtag.Normalize(tag)
+	if n == "" {
+		return ""
+	}
+	if strings.Contains(n, "-") {
+		return n // pt/zh regional form
+	}
+	if three, ok := iso6391to2[n]; ok {
+		return three
+	}
+	return n
 }
 
 func isImageCodec(c string) bool {

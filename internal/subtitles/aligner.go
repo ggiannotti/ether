@@ -17,6 +17,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/flight"
+	"github.com/braedonsaunders/ether/internal/langtag"
 )
 
 // Aligner implements core.TimelineAligner: it maps a moment in one release
@@ -395,7 +396,7 @@ func (s *Service) DialogueTimeline(ctx context.Context, title *core.Title, lang,
 		lang = s.alignLanguages[0]
 	}
 	bs := &buildState{searches: map[string][]Candidate{}}
-	tls := s.TimelineAligner().timelines(ctx, bs, title, normLang(lang), releaseName, dur)
+	tls := s.TimelineAligner().timelines(ctx, bs, title, langtag.Normalize(lang), releaseName, dur)
 	if len(tls) == 0 {
 		return nil, false
 	}

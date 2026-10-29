@@ -15,6 +15,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/langtag"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/trackprefs"
 )
@@ -90,18 +91,18 @@ func (f *fakeSubtitles) CachedSidecars(_ context.Context, t *core.Title, _ *core
 	for _, st := range embedded {
 		present[st.ExternalURL] = st.External
 		if st.Type == "subtitle" {
-			langs[normLang(st.Language)] = true
+			langs[langtag.Normalize(st.Language)] = true
 		}
 	}
 	var out []core.StreamInfo
 	for _, st := range f.picks[t.Key] {
 		if !present[st.ExternalURL] {
 			out = append(out, st)
-			langs[normLang(st.Language)] = true
+			langs[langtag.Normalize(st.Language)] = true
 		}
 	}
 	for _, st := range f.cached[t.Key] {
-		if !present[st.ExternalURL] && !langs[normLang(st.Language)] {
+		if !present[st.ExternalURL] && !langs[langtag.Normalize(st.Language)] {
 			out = append(out, st)
 		}
 	}

@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding/charmap"
+
+	"github.com/braedonsaunders/ether/internal/langtag"
 )
 
 // Cue is one subtitle cue.
@@ -21,7 +23,7 @@ type Cue struct {
 // legacyCharmap is the Windows code page legacy subtitle files in a
 // language are almost always encoded in.
 func legacyCharmap(lang string) *charmap.Charmap {
-	switch normLang(lang) {
+	switch langtag.Normalize(lang) {
 	case "ru", "uk", "bg", "sr", "mk", "be":
 		return charmap.Windows1251
 	case "pl", "cs", "sk", "hu", "ro", "hr", "sl", "bs", "sq":
